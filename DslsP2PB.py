@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import socket
@@ -20,15 +20,18 @@ import ipaddress
 import sys
 import select
 import queue
-import tempfile
+import http.server
+import socketserver
+import ssl
+from http import HTTPStatus
 
 # 浏览器渲染相关
 try:
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.common.exceptions import TimeoutException, WebDriverException
     from selenium.webdriver.common.by import By
+    from selenium.common.exceptions import TimeoutException, WebDriverException
     SELENIUM_AVAILABLE = True
 except ImportError:
     SELENIUM_AVAILABLE = False
@@ -40,17 +43,17 @@ class MessageType(Enum):
     ANON_REQUEST = 3
     ANON_RESPONSE = 4
     DATA_RELAY = 5
-    CHUNK_REQUEST = 6  # 请求特定块
-    CHUNK_RESPONSE = 7  # 响应块数据
+    CHUNK_REQUEST = 6
+    CHUNK_RESPONSE = 7
     HEARTBEAT = 8
-    RENDER_REQUEST = 9  # 渲染请求
-    RENDER_RESPONSE = 10  # 渲染响应
+    RENDER_REQUEST = 9
+    RENDER_RESPONSE = 10
     ERROR = 99
 
 class AnonP2PProtocol:
     """匿名P2P通信协议"""
     
-    HEADER_FORMAT = '!IBI'  # 总长度(4B) + 消息类型(1B) + 序列号(4B)
+    HEADER_FORMAT = '!IBI'
     HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
     
     @staticmethod
@@ -69,18 +72,16 @@ class AnonP2PProtocol:
         return struct.unpack(AnonP2PProtocol.HEADER_FORMAT, data[:AnonP2PProtocol.HEADER_SIZE])
 
 class LogManager:
-    """日志管理器 - 分离命令和日志"""
+    """日志管理器"""
     
     def __init__(self, log_file=None):
         self.log_queue = queue.Queue()
         self.log_file = log_file
         self.running = True
         
-        # 启动日志处理线程
         self.log_thread = threading.Thread(target=self._log_processor, daemon=True)
         self.log_thread.start()
         
-        # 如果指定了日志文件，创建文件
         if log_file:
             try:
                 with open(log_file, 'w', encoding='utf-8') as f:
@@ -96,16 +97,12 @@ class LogManager:
             self.log_queue.put(log_entry)
     
     def _log_processor(self):
-        """日志处理线程 - 专门负责输出日志"""
+        """日志处理线程"""
         while self.running:
             try:
-                # 从队列获取日志，最多等待1秒
                 log_entry = self.log_queue.get(timeout=1)
-                
-                # 输出到控制台
                 print(log_entry)
                 
-                # 输出到文件（如果指定）
                 if self.log_file:
                     try:
                         with open(self.log_file, 'a', encoding='utf-8') as f:
@@ -123,7 +120,6 @@ class LogManager:
     def stop(self):
         """停止日志管理器"""
         self.running = False
-        # 等待队列中的日志处理完毕
         self.log_queue.join()
 
 # 全局日志管理器
@@ -173,12 +169,12 @@ class NetworkHelper:
             return "255.255.255.255"
 
 class ChunkManager:
-    """块管理器 - 处理内容分块和重组"""
+    """块管理器"""
     
-    def __init__(self, chunk_size=1024):  # 1KB chunks
+    def __init__(self, chunk_size=1024):
         self.chunk_size = chunk_size
-        self.chunk_storage = {}  # {request_id: {chunk_index: data}}
-        self.completed_requests = {}  # {request_id: complete_data}
+        self.chunk_storage = {}
+        self.completed_requests = {}
     
     def split_content(self, content, request_id):
         """将内容分割成块"""
@@ -191,12 +187,11 @@ class ChunkManager:
             end = min(start + self.chunk_size, total_size)
             chunk_data = content[start:end]
             
-            # 创建块元数据
             chunk_info = {
                 'request_id': request_id,
                 'chunk_index': i,
                 'total_chunks': total_chunks,
-                'data': chunk_data.hex(),  # 转换为十六进制字符串传输
+                'data': chunk_data.hex(),
                 'data_size': len(chunk_data),
                 'hash': hashlib.md5(chunk_data).hexdigest()
             }
@@ -212,16 +207,13 @@ class ChunkManager:
         if request_id not in self.chunk_storage:
             self.chunk_storage[request_id] = {}
         
-        # 转换回字节数据
         try:
             chunk_data = bytes.fromhex(chunk_info['data'])
             self.chunk_storage[request_id][chunk_index] = chunk_data
             
-            # 验证哈希
             if hashlib.md5(chunk_data).hexdigest() != chunk_info['hash']:
                 return False
             
-            # 检查是否完成
             if self.is_request_complete(request_id, chunk_info['total_chunks']):
                 self._reconstruct_content(request_id, chunk_info['total_chunks'])
                 return True
@@ -244,7 +236,7 @@ class ChunkManager:
             if i in chunks:
                 content += chunks[i]
             else:
-                return False  # 缺少块
+                return False
         
         self.completed_requests[request_id] = content
         del self.chunk_storage[request_id]
@@ -261,17 +253,17 @@ class DistributedBrowserEngine:
         self.node = node
         self.driver = None
         self.initialized = False
-        self.resource_cache = {}  # 缓存已获取的资源
+        self.resource_cache = {}
         self.init_browser()
     
     def init_browser(self):
-        """初始化浏览器 - 添加详细调试"""
+        """修复的浏览器初始化方法"""
         if not SELENIUM_AVAILABLE:
             get_logger().log("[浏览器] 警告: Selenium 不可用")
             return False
         
         try:
-            from selenium.webdriver.chrome.options import Options
+            # 检查是否安装了webdriver_manager
             try:
                 from webdriver_manager.chrome import ChromeDriverManager
                 from selenium.webdriver.chrome.service import Service
@@ -279,29 +271,31 @@ class DistributedBrowserEngine:
                 get_logger().log("[浏览器] webdriver_manager 可用")
             except ImportError:
                 webdriver_manager_available = False
-                get_logger().log("[浏览器] webdriver_manager 未安装，将使用系统ChromeDriver")
+                get_logger().log("[浏览器] webdriver_manager 未安装")
+            
+            from selenium.webdriver.chrome.options import Options
+            import tempfile
+            import os
+            
             chrome_options = Options()
-
+            
+            # 创建唯一的用户数据目录
             user_data_dir = os.path.join(tempfile.gettempdir(), f"chrome_p2p_{self.node.node_id}")
             os.makedirs(user_data_dir, exist_ok=True)
-        
+            
             chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-gpu")
-            chrome_options.add_argument("--remote-debugging-port=0")  # 自动选择端口
+            chrome_options.add_argument("--remote-debugging-port=0")
             chrome_options.add_argument("--no-first-run")
             chrome_options.add_argument("--no-default-browser-check")
-            chrome_options.add_argument("--disable-background-timer-throttling")
-            chrome_options.add_argument("--disable-backgrounding-occluded-windows")
-            chrome_options.add_argument("--disable-renderer-backgrounding")
             
-            # 禁用扩展和不需要的功能
+            # 禁用扩展
             chrome_options.add_argument("--disable-extensions")
             chrome_options.add_argument("--disable-plugins")
             chrome_options.add_argument("--disable-translate")
             chrome_options.add_argument("--disable-default-apps")
-            chrome_options.add_argument("--disable-features=TranslateUI")
             
             # 设置用户代理
             chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
@@ -310,50 +304,48 @@ class DistributedBrowserEngine:
             
             try:
                 if webdriver_manager_available:
+                    from webdriver_manager.chrome import ChromeDriverManager
+                    from selenium.webdriver.chrome.service import Service
                     service = Service(ChromeDriverManager().install())
                     self.driver = webdriver.Chrome(service=service, options=chrome_options)
                     get_logger().log("[浏览器] 使用webdriver_manager自动管理的ChromeDriver")
                 else:
-                   # 使用系统PATH中的ChromeDriver
-                   self.driver = webdriver.Chrome(options=chrome_options)
-                   get_logger().log("[浏览器] 使用系统ChromeDriver")
-            
+                    self.driver = webdriver.Chrome(options=chrome_options)
+                    get_logger().log("[浏览器] 使用系统ChromeDriver")
+                    
             except Exception as e:
                 get_logger().log(f"[浏览器] Chrome启动失败: {e}")
-                # 尝试回退到其他启动方式
-                try:
-                    # 尝试不使用service的方式
-                    self.driver = webdriver.Chrome(options=chrome_options)
-                    get_logger().log("[浏览器] 使用回退启动方式成功")
-                except Exception as e2:
-                    get_logger().log(f"[浏览器] 所有启动方式都失败: {e2}")
-                    return False
+                return False
             
             # 配置超时设置
             self.driver.set_page_load_timeout(30)
             self.driver.set_script_timeout(20)
             self.driver.implicitly_wait(10)
-
-            # 测试浏览器是否真的工作
-            get_logger().log("[浏览器] 执行浏览器功能测试...")
-            self.driver.get("about:blank")
-            test_title = self.driver.title
-            get_logger().log(f"[浏览器] 测试页面标题: {test_title}")
             
-            self.driver.set_page_load_timeout(30)
-            self.initialized = True
-            get_logger().log("[浏览器] ✓ 浏览器引擎初始化成功且功能正常")
-            return True
-        
+            # 测试浏览器功能
+            try:
+                self.driver.get("about:blank")
+                test_title = self.driver.title
+                get_logger().log(f"[浏览器] 浏览器测试成功")
+                
+                self.initialized = True
+                get_logger().log("[浏览器] ✓ Chrome浏览器引擎初始化成功")
+                return True
+                
+            except Exception as e:
+                get_logger().log(f"[浏览器] 浏览器功能测试失败: {e}")
+                if self.driver:
+                    self.driver.quit()
+                return False
+                
         except Exception as e:
-            get_logger().log(f"[浏览器] ✗ 初始化失败: {str(e)}")
-            import traceback
-            get_logger().log(f"[浏览器] 详细错误: {traceback.format_exc()}")
+            get_logger().log(f"[浏览器] 初始化过程出错: {e}")
             return False
-        
+    
     def render_page_distributed(self, url, request_id):
         """分布式渲染页面"""
         if not self.initialized:
+            get_logger().log("[渲染] 浏览器未初始化，无法渲染")
             return None
         
         try:
@@ -364,46 +356,43 @@ class DistributedBrowserEngine:
             
             # 加载页面
             self.driver.get(url)
-            get_logger().log(f"[渲染] 页面加载命令已发送")
             
-            from selenium.webdriver.support.ui import WebDriverWait
+            # 等待页面加载完成
             WebDriverWait(self.driver, 15).until(
                 lambda driver: driver.execute_script("return document.readyState") == "complete"
             )
+            
+            # 额外等待确保动态内容加载
             time.sleep(2)
-            get_logger().log(f"[渲染] 页面加载完成")
-
+            
             # 获取页面HTML
             page_source = self.driver.page_source.encode('utf-8')
             current_url = self.driver.current_url
             title = self.driver.title
-        
-            get_logger().log(f"[渲染] 渲染完成: {title}")
+            
+            get_logger().log(f"[渲染] 页面渲染完成: {title}")
             get_logger().log(f"[渲染] 最终URL: {current_url}")
             get_logger().log(f"[渲染] 页面大小: {len(page_source)} 字节")
             
-            # 获取所有资源链接 (CSS, JS, 图片等)
-            resources = self._extract_resources(url)
+            # 获取所有资源链接
+            resources = self._extract_resources(current_url)
             get_logger().log(f"[渲染] 发现 {len(resources)} 个资源文件")
-
+            
             # 分布式获取资源
             distributed_resources = self._fetch_resources_distributed(resources, request_id)
-
+            
             # 构建完整的页面数据
             page_data = {
                 'html': page_source.hex(),
                 'resources': distributed_resources,
-                'url': self.driver.current_url,
-                'title': self.driver.title
+                'url': current_url,
+                'title': title
             }
-
-            get_logger().log(f"[渲染] ✓ 页面数据准备完成")
+            
             return page_data
             
         except Exception as e:
             get_logger().log(f"[渲染错误] {e}")
-            import traceback
-            get_logger().log(f"[渲染错误] 详细: {traceback.format_exc()}")
             return None
     
     def _extract_resources(self, base_url):
@@ -412,21 +401,21 @@ class DistributedBrowserEngine:
         
         try:
             # CSS文件
-            css_links = self.driver.find_elements_by_css_selector('link[rel="stylesheet"]')
+            css_links = self.driver.find_elements(By.CSS_SELECTOR, 'link[rel="stylesheet"]')
             for link in css_links:
                 href = link.get_attribute('href')
                 if href:
                     resources.append({'url': href, 'type': 'css'})
             
             # JS文件
-            js_scripts = self.driver.find_elements_by_css_selector('script[src]')
+            js_scripts = self.driver.find_elements(By.CSS_SELECTOR, 'script[src]')
             for script in js_scripts:
                 src = script.get_attribute('src')
                 if src:
                     resources.append({'url': src, 'type': 'js'})
             
             # 图片
-            images = self.driver.find_elements_by_css_selector('img[src]')
+            images = self.driver.find_elements(By.CSS_SELECTOR, 'img[src]')
             for img in images:
                 src = img.get_attribute('src')
                 if src:
@@ -479,7 +468,6 @@ class AnonymousWebClient:
     
     def fetch_anonymously(self, url, use_browser=False, timeout=10):
         """获取网页内容"""
-        # 普通HTTP请求
         try:
             if not url.startswith(('http://', 'https://')):
                 url = 'https://' + url
@@ -526,6 +514,137 @@ class AnonymousWebClient:
                 'error': str(e),
                 'loaded_with_browser': False
             }
+
+class P2PProxyHandler(http.server.SimpleHTTPRequestHandler):
+    """P2P代理HTTP处理器"""
+    
+    def __init__(self, *args, node=None, **kwargs):
+        self.node = node
+        super().__init__(*args, **kwargs)
+    
+    def do_GET(self):
+        """处理GET请求"""
+        try:
+            # 解析请求的URL
+            if self.path.startswith('/http://') or self.path.startswith('/https://'):
+                target_url = self.path[1:]  # 去掉开头的/
+            elif '?url=' in self.path:
+                # 从查询参数获取URL
+                import urllib.parse
+                parsed = urllib.parse.urlparse(self.path)
+                query_params = urllib.parse.parse_qs(parsed.query)
+                target_url = query_params.get('url', [''])[0]
+            else:
+                # 默认行为，显示使用说明
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                self.wfile.write(b"""
+                <html><body>
+                <h1>P2P Browser Proxy</h1>
+                <p>Usage:</p>
+                <ul>
+                <li>Access any site: http://localhost:8080/http://example.com</li>
+                <li>Or use query parameter: http://localhost:8080/?url=http://example.com</li>
+                </ul>
+                </body></html>
+                """)
+                return
+            
+            if not target_url:
+                self.send_error(400, "Missing URL parameter")
+                return
+            
+            get_logger().log(f"[代理] 请求URL: {target_url}")
+            
+            # 通过P2P网络获取页面（使用浏览器渲染）
+            result = self.node.request_web_page_distributed(target_url, use_browser=True)
+            
+            if result and result.get('success'):
+                content = result.get('content', b'')
+                
+                # 发送响应
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                
+                get_logger().log(f"[代理] 成功返回: {len(content)} 字节")
+            else:
+                error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                self.send_error(502, f"P2P fetch failed: {error_msg}")
+                get_logger().log(f"[代理] 获取失败: {error_msg}")
+                
+        except Exception as e:
+            self.send_error(500, f"Server error: {str(e)}")
+            get_logger().log(f"[代理错误] {e}")
+    
+    def log_message(self, format, *args):
+        """重写日志方法，使用我们的日志系统"""
+        get_logger().log(f"[HTTP] {format % args}")
+
+class P2PProxyServer:
+    """P2P代理服务器"""
+    
+    def __init__(self, node, host='localhost', port=8080, https_port=8443, ssl_certfile=None, ssl_keyfile=None):
+        self.node = node
+        self.host = host
+        self.port = port
+        self.https_port = https_port
+        self.ssl_certfile = ssl_certfile
+        self.ssl_keyfile = ssl_keyfile
+        self.http_server = None
+        self.https_server = None
+        self.running = False
+    
+    def start(self):
+        """启动代理服务器"""
+        # 启动HTTP服务器
+        handler = lambda *args, **kwargs: P2PProxyHandler(*args, node=self.node, **kwargs)
+        self.http_server = socketserver.TCPServer((self.host, self.port), handler)
+        http_thread = threading.Thread(target=self._serve_http, daemon=True)
+        http_thread.start()
+        get_logger().log(f"[代理] HTTP代理服务器启动在 http://{self.host}:{self.port}")
+        
+        # 如果提供了SSL证书，启动HTTPS服务器
+        if self.ssl_certfile and self.ssl_keyfile and os.path.exists(self.ssl_certfile) and os.path.exists(self.ssl_keyfile):
+            self.https_server = socketserver.TCPServer((self.host, self.https_port), handler)
+            self.https_server.socket = ssl.wrap_socket(
+                self.https_server.socket,
+                keyfile=self.ssl_keyfile,
+                certfile=self.ssl_certfile,
+                server_side=True
+            )
+            https_thread = threading.Thread(target=self._serve_https, daemon=True)
+            https_thread.start()
+            get_logger().log(f"[代理] HTTPS代理服务器启动在 https://{self.host}:{self.https_port}")
+        else:
+            get_logger().log("[代理] 未找到SSL证书，HTTPS服务未启动")
+        
+        self.running = True
+    
+    def _serve_http(self):
+        """运行HTTP服务器"""
+        try:
+            self.http_server.serve_forever()
+        except Exception as e:
+            get_logger().log(f"[代理错误] HTTP服务器错误: {e}")
+    
+    def _serve_https(self):
+        """运行HTTPS服务器"""
+        try:
+            self.https_server.serve_forever()
+        except Exception as e:
+            get_logger().log(f"[代理错误] HTTPS服务器错误: {e}")
+    
+    def stop(self):
+        """停止代理服务器"""
+        self.running = False
+        if self.http_server:
+            self.http_server.shutdown()
+        if self.https_server:
+            self.https_server.shutdown()
 
 class AnonymousP2PNode:
     """增强的匿名P2P节点 - 支持分布式浏览器渲染"""
@@ -1470,52 +1589,6 @@ class AnonymousP2PNode:
             self.browser_engine.close()
         self.thread_pool.shutdown()
 
-def print_menu():
-    """打印菜单"""
-    print("\n" + "="*60)
-    print("分布式浏览器渲染P2P系统")
-    print("1. 查看节点信息")
-    print("2. 列出已知节点")
-    print("3. 手动添加节点")
-    print("4. 普通分布式获取网页")
-    print("5. 浏览器渲染获取网页")
-    print("6. 网络测试")
-    print("7. 退出")
-    print("="*60)
-
-def network_test():
-    """网络测试"""
-    get_logger().log("=== 网络连通性测试 ===")
-    local_ip = NetworkHelper.get_local_ip()
-    broadcast_ip = NetworkHelper.get_broadcast_address()
-    
-    get_logger().log(f"本地IP: {local_ip}")
-    get_logger().log(f"广播地址: {broadcast_ip}")
-    
-    if SELENIUM_AVAILABLE:
-        get_logger().log("Selenium: 已安装")
-        try:
-            test_browser = DistributedBrowserEngine(None)
-            if test_browser.initialized:
-                get_logger().log("浏览器引擎: 可用")
-                test_browser.close()
-            else:
-                get_logger().log("浏览器引擎: 不可用")
-        except:
-            get_logger().log("浏览器引擎: 测试失败")
-    else:
-        get_logger().log("Selenium: 未安装")
-    
-    try:
-        test_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        test_sock.bind(('0.0.0.0', 8888))
-        test_sock.close()
-        get_logger().log("UDP端口绑定: 成功")
-    except Exception as e:
-        get_logger().log(f"UDP端口绑定: 失败 - {e}")
-    
-    get_logger().log("=====================")
-
 def run_command_interface(node):
     """运行命令界面"""
     while node.running:
@@ -1616,12 +1689,11 @@ def main():
     parser.add_argument('--port', type=int, default=8889, help='TCP端口号')
     parser.add_argument('--udp-port', type=int, default=8888, help='UDP广播端口')
     parser.add_argument('--node-id', type=str, help='节点ID')
-    parser.add_argument('--fetch', type=str, help='要获取的网页URL')
-    parser.add_argument('--via-node', type=str, help='通过哪个节点获取')
-    parser.add_argument('--browser', action='store_true', help='使用浏览器引擎')
-    parser.add_argument('--no-browser', action='store_true', help='禁用浏览器引擎')
-    parser.add_argument('--add-node', type=str, help='手动添加节点 (格式: node_id:ip:port)')
-    parser.add_argument('--test', action='store_true', help='测试网络连通性')
+    parser.add_argument('--enable-browser', action='store_true', help='启用浏览器引擎')
+    parser.add_argument('--proxy-port', type=int, default=8080, help='HTTP代理端口')
+    parser.add_argument('--https-port', type=int, default=8443, help='HTTPS代理端口')
+    parser.add_argument('--ssl-cert', type=str, help='SSL证书文件路径')
+    parser.add_argument('--ssl-key', type=str, help='SSL密钥文件路径')
     parser.add_argument('--log-file', type=str, help='日志文件路径')
     
     args = parser.parse_args()
@@ -1630,49 +1702,36 @@ def main():
     global log_manager
     log_manager = LogManager(log_file=args.log_file)
     
-    if args.test:
-        network_test()
-        log_manager.stop()
-        return
-    
     # 创建节点
-    enable_browser = not args.no_browser
     node = AnonymousP2PNode(
         node_id=args.node_id,
         tcp_port=args.port,
         udp_port=args.udp_port,
-        enable_browser=enable_browser
+        enable_browser=args.enable_browser
     )
     
     # 启动节点
     node.start()
     
+    # 启动代理服务器
+    proxy = P2PProxyServer(
+        node=node,
+        port=args.proxy_port,
+        https_port=args.https_port,
+        ssl_certfile=args.ssl_cert,
+        ssl_keyfile=args.ssl_key
+    )
+    proxy.start()
+    
     try:
-        # 手动添加节点
-        if args.add_node:
-            try:
-                node_id, ip, port_str = args.add_node.split(':')
-                node.manual_add_node(node_id, ip, port_str)
-            except ValueError:
-                get_logger().log("[错误] 节点格式错误，应为 node_id:ip:port")
-        
-        # 获取网页
-        if args.fetch:
-            use_browser = args.browser
-            result = node.request_web_page_distributed(args.fetch, use_browser=use_browser)
-            if result and result.get('success'):
-                mode = "浏览器" if use_browser else "普通"
-                get_logger().log(f"[成功] {mode}模式获取成功: {len(result.get('content', b''))} 字节")
-            else:
-                get_logger().log("[失败] 获取网页失败")
-        
-        # 启动命令界面
+        # 运行命令界面
         run_command_interface(node)
                 
     except KeyboardInterrupt:
         get_logger().log("\n[系统] 收到中断信号")
     finally:
         node.stop()
+        proxy.stop()
         log_manager.stop()
 
 if __name__ == "__main__":
