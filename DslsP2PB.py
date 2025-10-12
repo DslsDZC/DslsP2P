@@ -1589,100 +1589,6 @@ class AnonymousP2PNode:
             self.browser_engine.close()
         self.thread_pool.shutdown()
 
-def run_command_interface(node):
-    """运行命令界面"""
-    while node.running:
-        try:
-            print_menu()
-            choice = input("请选择操作 (1-7): ").strip()
-            
-            if choice == '1':
-                info = node.get_node_info()
-                print(f"\n节点信息:")
-                print(f"  节点ID: {info['node_id']}")
-                print(f"  地址: {info['ip']}:{info['tcp_port']}")
-                print(f"  已知节点: {info['known_nodes']} 个")
-                print(f"  累计发现: {info['nodes_discovered']} 次")
-                print(f"  浏览器引擎: {info['browser_engine']}")
-                input("\n按回车键继续...")
-                
-            elif choice == '2':
-                nodes = node.list_known_nodes()
-                print(f"\n已知节点 ({len(nodes)} 个):")
-                for i, node_info in enumerate(nodes, 1):
-                    browser_status = "[支持浏览器]" if node_info.get('browser_capable') else ""
-                    print(f"  {i}. {node_info['id']} {browser_status}")
-                    print(f"     地址: {node_info['address']}")
-                    print(f"     最后活跃: {node_info['last_seen']:.1f} 秒前")
-                input("\n按回车键继续...")
-                    
-            elif choice == '3':
-                node_input = input("请输入节点信息 (格式: node_id:ip:port): ").strip()
-                try:
-                    node_id, ip, port_str = node_input.split(':')
-                    node.manual_add_node(node_id, ip, port_str)
-                except ValueError:
-                    print("[错误] 节点格式错误，应为 node_id:ip:port")
-                input("\n按回车键继续...")
-                    
-            elif choice == '4' or choice == '5':
-                url = input("请输入网页URL: ").strip()
-                use_browser = (choice == '5')
-                
-                print(f"[请求] 开始分布式获取: {url}")
-                result = node.request_web_page_distributed(url, use_browser=use_browser)
-                
-                if result and result.get('success'):
-                    content = result.get('content', b'')
-                    title = result.get('title', '无标题')
-                    
-                    print(f"\n[成功] 获取到网页内容:")
-                    print(f"  标题: {title}")
-                    print(f"  URL: {result.get('url')}")
-                    print(f"  大小: {len(content)} 字节")
-                    print(f"  方式: {'浏览器渲染' if result.get('loaded_with_browser') else '分布式获取'}")
-                    
-                    # 保存到文件
-                    filename = f"webpage_{int(time.time())}.html"
-                    with open(filename, 'wb') as f:
-                        f.write(content)
-                    print(f"  内容已保存到: {filename}")
-                    
-                    # 如果有资源，也保存
-                    if 'resources' in result:
-                        resource_dir = f"resources_{int(time.time())}"
-                        os.makedirs(resource_dir, exist_ok=True)
-                        for resource_url, resource_info in result['resources'].items():
-                            if resource_info.get('data'):
-                                resource_data = bytes.fromhex(resource_info['data'])
-                                # 简化文件名
-                                resource_filename = hashlib.md5(resource_url.encode()).hexdigest()[:8] + f".{resource_info['type']}"
-                                with open(os.path.join(resource_dir, resource_filename), 'wb') as f:
-                                    f.write(resource_data)
-                        print(f"  资源文件保存到: {resource_dir}")
-                else:
-                    print("\n[失败] 获取网页失败")
-                    if result:
-                        print(f"  错误: {result.get('error', '未知错误')}")
-                
-                input("\n按回车键继续...")
-                    
-            elif choice == '6':
-                network_test()
-                input("\n按回车键继续...")
-                
-            elif choice == '7':
-                break
-            else:
-                print("[错误] 无效选择")
-                input("\n按回车键继续...")
-                
-        except (EOFError, KeyboardInterrupt):
-            break
-        except Exception as e:
-            print(f"[命令错误] {e}")
-            input("\n按回车键继续...")
-
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='分布式浏览器渲染P2P节点')
@@ -1724,8 +1630,6 @@ def main():
     proxy.start()
     
     try:
-        # 运行命令界面
-        run_command_interface(node)
                 
     except KeyboardInterrupt:
         get_logger().log("\n[系统] 收到中断信号")
