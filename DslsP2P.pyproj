@@ -27,6 +27,7 @@
   <ItemGroup>
     <Compile Include="DslsP2P.py" />
     <Compile Include="DslsP2PB.py" />
+    <Compile Include="dslsp2p_bata.py" />
   </ItemGroup>
   <ItemGroup>
     <Interpreter Include="dsls\">

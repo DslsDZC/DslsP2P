@@ -2606,275 +2606,275 @@ class RoutingEngine:
         self.network = network
         self.routing_table = {}
     
-    async def calculate_route(self, target_info: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """计算多跳路由路径，考虑网络拓扑、节点信誉和网络性能"""
-        if not target_info or "node_id" not in target_info:
-            logger.error("目标节点信息不完整，无法计算路由")
-            return []
+async def calculate_route(self, target_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """计算多跳路由路径，考虑网络拓扑、节点信誉和网络性能"""
+    if not target_info or "node_id" not in target_info:
+        logger.error("目标节点信息不完整，无法计算路由")
+        return []
 
-        target_id = target_info["node_id"]
+    target_id = target_info["node_id"]
     
-        # 1. 检查是否为直接连接的节点（0跳）
-        if target_id in self.network.node_list:
-            direct_node = self.network.node_list[target_id]
-            if direct_node.get("active"):
-                return [{
-                    "path": [self.identity.node_id, target_id],
-                    "score": 1.0,  # 直接连接得分最高
-                    "hops": 1,
-                    "latency": direct_node.get("last_latency", 0),
-                    "reputation": direct_node.get("reputation", 0),
-                    "bandwidth": direct_node.get("bandwidth", 0)
-                }]
+    # 1. 检查是否为直接连接的节点（0跳）
+    if target_id in self.network.node_list:
+        direct_node = self.network.node_list[target_id]
+        if direct_node.get("active"):
+            return [{
+                "path": [self.identity.node_id, target_id],
+                "score": 1.0,  # 直接连接得分最高
+                "hops": 1,
+                "latency": direct_node.get("last_latency", 0),
+                "reputation": direct_node.get("reputation", 0),
+                "bandwidth": direct_node.get("bandwidth", 0)
+            }]
 
-        # 2. 初始化路由发现（基于改进的Dijkstra算法）
-        max_hops = self.config.performance_params.get("max_hops", 8)
-        available_paths = []
-        visited = set()
-        queue = deque()
+    # 2. 初始化路由发现（基于改进的Dijkstra算法）
+    max_hops = self.config.performance_params.get("max_hops", 8)
+    available_paths = []
+    visited = set()
+    queue = deque()
     
-        # 从直接连接的活跃节点开始探索（1跳）
-        for neighbor_id, neighbor_info in self.network.node_list.items():
-            if neighbor_info.get("active") and neighbor_id != self.identity.node_id:
-                initial_score = self._calculate_path_score(neighbor_info, target_info)
-                queue.append({
-                    "current_node": neighbor_id,
-                    "path": [self.identity.node_id, neighbor_id],
-                    "score": initial_score,
-                    "hops": 1,
-                    "cumulative_latency": neighbor_info.get("last_latency", 0),
-                    "total_reputation": neighbor_info.get("reputation", 0)
-                })
-                visited.add(neighbor_id)
+    # 从直接连接的活跃节点开始探索（1跳）
+    for neighbor_id, neighbor_info in self.network.node_list.items():
+        if neighbor_info.get("active") and neighbor_id != self.identity.node_id:
+            initial_score = self._calculate_path_score(neighbor_info, target_info)
+            queue.append({
+                "current_node": neighbor_id,
+                "path": [self.identity.node_id, neighbor_id],
+                "score": initial_score,
+                "hops": 1,
+                "cumulative_latency": neighbor_info.get("last_latency", 0),
+                "total_reputation": neighbor_info.get("reputation", 0)
+            })
+            visited.add(neighbor_id)
 
-        # 3. 多跳路由探索
-        while queue and len(available_paths) < 5:  # 限制最大候选路径数量
-            current = queue.popleft()
-            current_node_id = current["current_node"]
-            current_hops = current["hops"]
+    # 3. 多跳路由探索
+    while queue and len(available_paths) < 5:  # 限制最大候选路径数量
+        current = queue.popleft()
+        current_node_id = current["current_node"]
+        current_hops = current["hops"]
 
-            # 如果达到最大跳数，停止探索该路径
-            if current_hops >= max_hops:
+        # 如果达到最大跳数，停止探索该路径
+        if current_hops >= max_hops:
+            continue
+
+        # 获取当前节点的邻居列表（可能需要从路由表或网络查询）
+        current_neighbors = await self._get_node_neighbors(current_node_id)
+        if not current_neighbors:
+            continue
+
+        # 探索邻居节点
+        for neighbor_id, neighbor_info in current_neighbors.items():
+            # 避免循环和重复节点
+            if neighbor_id in current["path"] or neighbor_id in visited:
                 continue
 
-            # 获取当前节点的邻居列表（可能需要从路由表或网络查询）
-            current_neighbors = await self._get_node_neighbors(current_node_id)
-            if not current_neighbors:
-                continue
-
-            # 探索邻居节点
-            for neighbor_id, neighbor_info in current_neighbors.items():
-                # 避免循环和重复节点
-                if neighbor_id in current["path"] or neighbor_id in visited:
-                    continue
-
-                # 计算新路径评分
-                new_path = current["path"] + [neighbor_id]
-                new_hops = current_hops + 1
-                new_latency = current["cumulative_latency"] + neighbor_info.get("last_latency", 0)
-                new_reputation = (current["total_reputation"] + neighbor_info.get("reputation", 0)) / new_hops
+            # 计算新路径评分
+            new_path = current["path"] + [neighbor_id]
+            new_hops = current_hops + 1
+            new_latency = current["cumulative_latency"] + neighbor_info.get("last_latency", 0)
+            new_reputation = (current["total_reputation"] + neighbor_info.get("reputation", 0)) / new_hops
             
-                # 计算路径评分（综合考虑多因素）
-                path_score = self._calculate_multi_hop_score(
-                    neighbor_info, 
-                    target_info, 
-                    new_hops, 
-                    new_latency, 
-                    new_reputation
-                )
+            # 计算路径评分（综合考虑多因素）
+            path_score = self._calculate_multi_hop_score(
+                neighbor_info, 
+                target_info, 
+                new_hops, 
+                new_latency, 
+                new_reputation
+            )
 
-                # 检查是否到达目标节点
-                if neighbor_id == target_id:
-                    available_paths.append({
-                        "path": new_path,
-                        "score": path_score,
-                        "hops": new_hops,
-                        "latency": new_latency,
-                        "reputation": new_reputation,
-                        "bandwidth": neighbor_info.get("bandwidth", 0)
-                    })
-                    continue
-
-                # 添加到队列继续探索
-                queue.append({
-                    "current_node": neighbor_id,
+            # 检查是否到达目标节点
+            if neighbor_id == target_id:
+                available_paths.append({
                     "path": new_path,
                     "score": path_score,
                     "hops": new_hops,
-                    "cumulative_latency": new_latency,
-                    "total_reputation": current["total_reputation"] + neighbor_info.get("reputation", 0)
+                    "latency": new_latency,
+                    "reputation": new_reputation,
+                    "bandwidth": neighbor_info.get("bandwidth", 0)
                 })
-                visited.add(neighbor_id)
+                continue
 
-        # 4. 补充备用路由（如果直接路径不足）
-        if not available_paths and self.network.node_list:
-            available_paths = await self._generate_fallback_routes(target_info, max_hops)
-
-        # 5. 按评分排序并过滤重复路径
-        unique_paths = []
-        seen_paths = set()
-        for path in sorted(available_paths, key=lambda x: x["score"], reverse=True):
-            path_str = "-".join(path["path"])
-            if path_str not in seen_paths:
-                seen_paths.add(path_str)
-                unique_paths.append(path)
-
-        return unique_paths[:3]  # 返回评分最高的3条路径
-
-    def _calculate_multi_hop_score(self, node_info: Dict[str, Any], target_info: Dict[str, Any], 
-                                 hops: int, latency: float, reputation: float) -> float:
-        """计算多跳路径评分，综合考虑多种因素"""
-        # 基础权重配置（可从配置中加载）
-        weights = self.config.performance_params.get("routing_weights", {
-            "reputation": 0.4,
-            "latency": 0.25,
-            "bandwidth": 0.2,
-            "hops": 0.1,
-            "stability": 0.05
-        })
-
-        # 1. 信誉评分（0-1）
-        rep_score = min(max(reputation / 1000, 0), 1)  # 假设最大信誉为1000
-
-        # 2. 延迟评分（0-1，延迟越低得分越高）
-        max_acceptable_latency = 5000  # 5秒作为最大可接受延迟
-        latency_score = 1 - min(latency / max_acceptable_latency, 1)
-
-        # 3. 带宽评分（0-1）
-        bandwidth = node_info.get("bandwidth", 0)
-        max_bandwidth = 100  # 100Mbps作为参考最大值
-        bandwidth_score = min(bandwidth / max_bandwidth, 1)
-
-        # 4. 跳数评分（0-1，跳数越少得分越高）
-        max_hops = self.config.performance_params.get("max_hops", 8)
-        hops_score = 1 - (hops / max_hops)
-
-        # 5. 稳定性评分（0-1）
-        uptime = node_info.get("uptime_ratio", 0)
-        stability_score = min(uptime, 1)
-
-        # 6. 目标相似度评分（0-1，基于节点类型和地理位置）
-        similarity_score = self._calculate_similarity_score(node_info, target_info)
-
-        # 综合评分（加权求和）
-        total_score = (
-            rep_score * weights["reputation"] +
-            latency_score * weights["latency"] +
-            bandwidth_score * weights["bandwidth"] +
-            hops_score * weights["hops"] +
-            stability_score * weights["stability"] +
-            similarity_score * 0.1  # 额外增加相似度权重
-        )
-
-        return round(total_score, 4)
-
-    def _calculate_similarity_score(self, node_info: Dict[str, Any], target_info: Dict[str, Any]) -> float:
-        """计算节点与目标的相似度评分（基于类型、地理位置等）"""
-        score = 0.0
-
-        # 节点类型相似度
-        if node_info.get("node_type") == target_info.get("node_type"):
-            score += 0.3
-
-        # 地理位置相似度（假设存在region信息）
-        if node_info.get("region") and target_info.get("region"):
-            if node_info["region"] == target_info["region"]:
-                score += 0.3
-            elif node_info.get("country") == target_info.get("country"):
-                score += 0.15
-
-        # 能力相似度（支持的服务类型）
-        node_capabilities = set(node_info.get("capabilities", {}).keys())
-        target_capabilities = set(target_info.get("required_capabilities", []))
-        if target_capabilities:
-            overlap = len(node_capabilities & target_capabilities) / len(target_capabilities)
-            score += overlap * 0.4
-
-        return min(score, 1.0)
-
-    async def _get_node_neighbors(self, node_id: str) -> Dict[str, Any]:
-        """获取指定节点的邻居列表（可能需要网络查询）"""
-        # 1. 先检查本地缓存
-        if node_id in self.routing_table:
-            cached_neighbors = self.routing_table[node_id].get("neighbors", {})
-            if cached_neighbors and time.time() - self.routing_table[node_id].get("last_updated", 0) < 300:
-                return cached_neighbors
-
-        # 2. 本地缓存失效，向节点发送查询请求
-        try:
-            node_info = self.network.node_list.get(node_id)
-            if not node_info or not node_info.get("active"):
-                return {}
-
-            # 发送邻居查询消息
-            reader, writer = await asyncio.open_connection(
-                node_info["address"][0], 
-                node_info["address"][1]
-            )
-        
-            # 构建查询消息
-            query = {
-                "type": "neighbor_query",
-                "source": self.identity.node_id,
-                "target": node_id,
-                "timestamp": time.time()
-            }
-        
-            # 发送并等待响应
-            data = json.dumps(query).encode()
-            writer.write(struct.pack(">I", len(data)) + data)
-            await writer.drain()
-
-            # 读取响应
-            length_data = await reader.readexactly(4)
-            response_length = struct.unpack(">I", length_data)[0]
-            response_data = await reader.readexactly(response_length)
-            response = json.loads(response_data.decode())
-
-            writer.close()
-            await writer.wait_closed()
-
-            # 更新本地缓存
-            if "neighbors" in response:
-                self.routing_table[node_id] = {
-                    "neighbors": response["neighbors"],
-                    "last_updated": time.time()
-                }
-                return response["neighbors"]
-
-        except Exception as e:
-            logger.error(f"获取节点 {node_id} 邻居列表失败: {e}")
-
-        return {}
-
-    async def _generate_fallback_routes(self, target_info: Dict[str, Any], max_hops: int) -> List[Dict[str, Any]]:
-        """生成备用路由（当直接路由发现失败时）"""
-        fallback_routes = []
-        target_id = target_info["node_id"]
-    
-        # 1. 基于节点信誉随机选择路径
-        reputable_nodes = [
-            (nid, ninfo) for nid, ninfo in self.network.node_list.items()
-            if ninfo.get("active") and ninfo.get("reputation", 0) > 800
-        ]
-    
-        if len(reputable_nodes) >= max_hops:
-            # 随机选择节点组成路径
-            path_nodes = random.sample(reputable_nodes, max_hops-1)
-            path = [self.identity.node_id] + [nid for nid, _ in path_nodes] + [target_id]
-        
-            # 计算路径评分
-            avg_reputation = sum(ninfo.get("reputation", 0) for _, ninfo in path_nodes) / len(path_nodes)
-            fallback_routes.append({
-                "path": path,
-                "score": 0.5 + (avg_reputation / 2000),  # 基础分+信誉加成
-                "hops": len(path) - 1,
-                "latency": 0,  # 未知延迟
-                "reputation": avg_reputation,
-                "bandwidth": 0
+            # 添加到队列继续探索
+            queue.append({
+                "current_node": neighbor_id,
+                "path": new_path,
+                "score": path_score,
+                "hops": new_hops,
+                "cumulative_latency": new_latency,
+                "total_reputation": current["total_reputation"] + neighbor_info.get("reputation", 0)
             })
+            visited.add(neighbor_id)
+
+    # 4. 补充备用路由（如果直接路径不足）
+    if not available_paths and self.network.node_list:
+        available_paths = await self._generate_fallback_routes(target_info, max_hops)
+
+    # 5. 按评分排序并过滤重复路径
+    unique_paths = []
+    seen_paths = set()
+    for path in sorted(available_paths, key=lambda x: x["score"], reverse=True):
+        path_str = "-".join(path["path"])
+        if path_str not in seen_paths:
+            seen_paths.add(path_str)
+            unique_paths.append(path)
+
+    return unique_paths[:3]  # 返回评分最高的3条路径
+
+def _calculate_multi_hop_score(self, node_info: Dict[str, Any], target_info: Dict[str, Any], 
+                             hops: int, latency: float, reputation: float) -> float:
+    """计算多跳路径评分，综合考虑多种因素"""
+    # 基础权重配置（可从配置中加载）
+    weights = self.config.performance_params.get("routing_weights", {
+        "reputation": 0.4,
+        "latency": 0.25,
+        "bandwidth": 0.2,
+        "hops": 0.1,
+        "stability": 0.05
+    })
+
+    # 1. 信誉评分（0-1）
+    rep_score = min(max(reputation / 1000, 0), 1)  # 假设最大信誉为1000
+
+    # 2. 延迟评分（0-1，延迟越低得分越高）
+    max_acceptable_latency = 5000  # 5秒作为最大可接受延迟
+    latency_score = 1 - min(latency / max_acceptable_latency, 1)
+
+    # 3. 带宽评分（0-1）
+    bandwidth = node_info.get("bandwidth", 0)
+    max_bandwidth = 100  # 100Mbps作为参考最大值
+    bandwidth_score = min(bandwidth / max_bandwidth, 1)
+
+    # 4. 跳数评分（0-1，跳数越少得分越高）
+    max_hops = self.config.performance_params.get("max_hops", 8)
+    hops_score = 1 - (hops / max_hops)
+
+    # 5. 稳定性评分（0-1）
+    uptime = node_info.get("uptime_ratio", 0)
+    stability_score = min(uptime, 1)
+
+    # 6. 目标相似度评分（0-1，基于节点类型和地理位置）
+    similarity_score = self._calculate_similarity_score(node_info, target_info)
+
+    # 综合评分（加权求和）
+    total_score = (
+        rep_score * weights["reputation"] +
+        latency_score * weights["latency"] +
+        bandwidth_score * weights["bandwidth"] +
+        hops_score * weights["hops"] +
+        stability_score * weights["stability"] +
+        similarity_score * 0.1  # 额外增加相似度权重
+    )
+
+    return round(total_score, 4)
+
+def _calculate_similarity_score(self, node_info: Dict[str, Any], target_info: Dict[str, Any]) -> float:
+    """计算节点与目标的相似度评分（基于类型、地理位置等）"""
+    score = 0.0
+
+    # 节点类型相似度
+    if node_info.get("node_type") == target_info.get("node_type"):
+        score += 0.3
+
+    # 地理位置相似度（假设存在region信息）
+    if node_info.get("region") and target_info.get("region"):
+        if node_info["region"] == target_info["region"]:
+            score += 0.3
+        elif node_info.get("country") == target_info.get("country"):
+            score += 0.15
+
+    # 能力相似度（支持的服务类型）
+    node_capabilities = set(node_info.get("capabilities", {}).keys())
+    target_capabilities = set(target_info.get("required_capabilities", []))
+    if target_capabilities:
+        overlap = len(node_capabilities & target_capabilities) / len(target_capabilities)
+        score += overlap * 0.4
+
+    return min(score, 1.0)
+
+async def _get_node_neighbors(self, node_id: str) -> Dict[str, Any]:
+    """获取指定节点的邻居列表（可能需要网络查询）"""
+    # 1. 先检查本地缓存
+    if node_id in self.routing_table:
+        cached_neighbors = self.routing_table[node_id].get("neighbors", {})
+        if cached_neighbors and time.time() - self.routing_table[node_id].get("last_updated", 0) < 300:
+            return cached_neighbors
+
+    # 2. 本地缓存失效，向节点发送查询请求
+    try:
+        node_info = self.network.node_list.get(node_id)
+        if not node_info or not node_info.get("active"):
+            return {}
+
+        # 发送邻居查询消息
+        reader, writer = await asyncio.open_connection(
+            node_info["address"][0], 
+            node_info["address"][1]
+        )
+        
+        # 构建查询消息
+        query = {
+            "type": "neighbor_query",
+            "source": self.identity.node_id,
+            "target": node_id,
+            "timestamp": time.time()
+        }
+        
+        # 发送并等待响应
+        data = json.dumps(query).encode()
+        writer.write(struct.pack(">I", len(data)) + data)
+        await writer.drain()
+
+        # 读取响应
+        length_data = await reader.readexactly(4)
+        response_length = struct.unpack(">I", length_data)[0]
+        response_data = await reader.readexactly(response_length)
+        response = json.loads(response_data.decode())
+
+        writer.close()
+        await writer.wait_closed()
+
+        # 更新本地缓存
+        if "neighbors" in response:
+            self.routing_table[node_id] = {
+                "neighbors": response["neighbors"],
+                "last_updated": time.time()
+            }
+            return response["neighbors"]
+
+    except Exception as e:
+        logger.error(f"获取节点 {node_id} 邻居列表失败: {e}")
+
+    return {}
+
+async def _generate_fallback_routes(self, target_info: Dict[str, Any], max_hops: int) -> List[Dict[str, Any]]:
+    """生成备用路由（当直接路由发现失败时）"""
+    fallback_routes = []
+    target_id = target_info["node_id"]
     
-        return fallback_routes
+    # 1. 基于节点信誉随机选择路径
+    reputable_nodes = [
+        (nid, ninfo) for nid, ninfo in self.network.node_list.items()
+        if ninfo.get("active") and ninfo.get("reputation", 0) > 800
+    ]
+    
+    if len(reputable_nodes) >= max_hops:
+        # 随机选择节点组成路径
+        path_nodes = random.sample(reputable_nodes, max_hops-1)
+        path = [self.identity.node_id] + [nid for nid, _ in path_nodes] + [target_id]
+        
+        # 计算路径评分
+        avg_reputation = sum(ninfo.get("reputation", 0) for _, ninfo in path_nodes) / len(path_nodes)
+        fallback_routes.append({
+            "path": path,
+            "score": 0.5 + (avg_reputation / 2000),  # 基础分+信誉加成
+            "hops": len(path) - 1,
+            "latency": 0,  # 未知延迟
+            "reputation": avg_reputation,
+            "bandwidth": 0
+        })
+    
+    return fallback_routes
     
     def _calculate_path_score(self, node_info: Dict[str, Any], target_info: Dict[str, Any]) -> float:
         """计算路径评分"""
@@ -2939,24 +2939,271 @@ class UPNPManager:
             logger.error(f"UPnP端口映射设置失败: {e}")
             return False
 
-# 简化实现的其他组件类
 class AdaptiveOptimizer:
-    """自适应性能优化器"""
+    """自适应性能优化器，基于网络实时状态动态调整系统参数"""
     
     def __init__(self, network: DistributedAnonymousNetwork):
         self.network = network
-    
+        self.optimization_history = deque(maxlen=100)  # 保存最近100次优化记录
+        self.last_optimization = 0
+        self.optimization_interval = 30  # 优化检查间隔（秒）
+        self.thresholds = {
+            "latency": {
+                "high": 500,    # 高延迟阈值（ms）
+                "medium": 200,  # 中等延迟阈值（ms）
+                "low": 100      # 低延迟阈值（ms）
+            },
+            "packet_loss": {
+                "high": 0.2,    # 高丢包率阈值
+                "medium": 0.1,  # 中等丢包率阈值
+                "low": 0.05     # 低丢包率阈值
+            },
+            "error_rate": {
+                "high": 0.1,    # 高错误率阈值
+                "medium": 0.05, # 中等错误率阈值
+                "low": 0.02     # 低错误率阈值
+            }
+        }
+
+    async def start_optimization_loop(self):
+        """启动持续优化循环"""
+        while self.network.is_running:
+            try:
+                await self.optimize_performance()
+                await asyncio.sleep(self.optimization_interval)
+            except Exception as e:
+                logger.error(f"性能优化循环出错: {e}")
+                await asyncio.sleep(10)  # 出错时缩短间隔重试
+
     async def optimize_performance(self):
-        """性能优化"""
-        stats = self.network.performance_monitor.get_performance_stats()
+        """基于实时网络状态进行多维度性能优化"""
+        current_time = time.time()
+        if current_time - self.last_optimization < self.optimization_interval:
+            return  # 未到优化时间间隔
         
-        # 基于性能指标调整参数
-        if stats["avg_latency"] > 500:
-            # 高延迟，减少分片数
-            pass
-        elif stats["error_count"] > 10:
-            # 高错误率，增加冗余
-            pass
+        # 获取最新性能统计数据
+        stats = self.network.performance_monitor.get_performance_stats()
+        if not stats:
+            logger.warning("无性能数据，无法进行优化")
+            return
+
+        optimization_actions = []
+        
+        # 1. 路由策略优化
+        route_optimizations = await self._optimize_routing_strategy(stats)
+        optimization_actions.extend(route_optimizations)
+        
+        # 2. 分片策略优化
+        fragment_optimizations = self._optimize_fragmentation_strategy(stats)
+        optimization_actions.extend(fragment_optimizations)
+        
+        # 3. 连接管理优化
+        connection_optimizations = await self._optimize_connection_management(stats)
+        optimization_actions.extend(connection_optimizations)
+        
+        # 4. 加密级别动态调整
+        crypto_optimizations = self._optimize_crypto_strategy(stats)
+        optimization_actions.extend(crypto_optimizations)
+        
+        # 记录优化历史
+        if optimization_actions:
+            self.optimization_history.append({
+                "timestamp": current_time,
+                "stats": {k: v for k, v in stats.items() if k in ["avg_latency", "packet_loss", "error_rate"]},
+                "actions": optimization_actions
+            })
+            logger.info(f"执行了{len(optimization_actions)}项性能优化")
+        
+        self.last_optimization = current_time
+
+    async def _optimize_routing_strategy(self, stats: Dict[str, Any]) -> List[str]:
+        """优化路由策略"""
+        actions = []
+        current_algorithm = self.network.config.performance_params.get("routing.algorithm", "adaptive")
+        current_max_hops = self.network.config.performance_params.get("max_hops", 8)
+        
+        # 根据延迟调整最大跳数
+        if stats["avg_latency"] > self.thresholds["latency"]["high"]:
+            # 高延迟网络，减少跳数
+            new_max_hops = max(2, current_max_hops - 2)
+            if new_max_hops != current_max_hops:
+                self.network.config.performance_params["max_hops"] = new_max_hops
+                actions.append(f"高延迟网络，将最大跳数从{current_max_hops}调整为{new_max_hops}")
+        
+        elif stats["avg_latency"] < self.thresholds["latency"]["low"]:
+            # 低延迟网络，可增加跳数以提高匿名性
+            new_max_hops = min(10, current_max_hops + 1)
+            if new_max_hops != current_max_hops:
+                self.network.config.performance_params["max_hops"] = new_max_hops
+                actions.append(f"低延迟网络，将最大跳数从{current_max_hops}调整为{new_max_hops}")
+        
+        # 根据丢包率调整路由算法
+        if stats["packet_loss"] > self.thresholds["packet_loss"]["high"]:
+            # 高丢包率，切换到更稳健的路由算法
+            if current_algorithm != "robust":
+                self.network.config.performance_params["routing.algorithm"] = "robust"
+                actions.append(f"高丢包率，路由算法从{current_algorithm}切换为robust")
+                # 立即更新路由表
+                await self.network.update_routing_table()
+        
+        elif stats["packet_loss"] < self.thresholds["packet_loss"]["low"] and current_algorithm != "fast":
+            # 低丢包率，切换到更快的路由算法
+            self.network.config.performance_params["routing.algorithm"] = "fast"
+            actions.append(f"低丢包率，路由算法从{current_algorithm}切换为fast")
+        
+        # 动态调整路由权重
+        if stats["error_rate"] > self.thresholds["error_rate"]["high"]:
+            # 高错误率，增加节点信誉权重
+            self.network.config.performance_params["routing.weights.reputation"] = 0.6
+            self.network.config.performance_params["routing.weights.latency"] = 0.2
+            actions.append("高错误率，增加节点信誉权重至0.6")
+        
+        return actions
+
+    def _optimize_fragmentation_strategy(self, stats: Dict[str, Any]) -> List[str]:
+        """优化数据分片策略"""
+        actions = []
+        frag_config = self.network.config.performance_params.get("fragmentation", {})
+        current_min_size = frag_config.get("min_fragment_size", 512)
+        current_max_size = frag_config.get("max_fragment_size", 16384)
+        current_redundancy = frag_config.get("redundancy_factor", 1.5)
+        
+        # 根据网络状况调整分片大小
+        if stats["avg_latency"] > self.thresholds["latency"]["high"] or stats["packet_loss"] > self.thresholds["packet_loss"]["high"]:
+            # 网络状况差，使用更小的分片
+            new_max_size = max(1024, current_max_size // 2)
+            if new_max_size != current_max_size:
+                frag_config["max_fragment_size"] = new_max_size
+                actions.append(f"网络状况差，最大分片大小从{current_max_size}调整为{new_max_size}")
+                
+                # 增加冗余
+                new_redundancy = min(3.0, current_redundancy + 0.5)
+                if new_redundancy != current_redundancy:
+                    frag_config["redundancy_factor"] = new_redundancy
+                    actions.append(f"增加数据冗余，从{current_redundancy}调整为{new_redundancy}")
+        
+        elif stats["avg_latency"] < self.thresholds["latency"]["low"] and stats["packet_loss"] < self.thresholds["packet_loss"]["low"]:
+            # 网络状况好，使用更大的分片
+            new_max_size = min(32768, current_max_size * 2)
+            if new_max_size != current_max_size:
+                frag_config["max_fragment_size"] = new_max_size
+                actions.append(f"网络状况好，最大分片大小从{current_max_size}调整为{new_max_size}")
+                
+                # 减少冗余
+                new_redundancy = max(1.0, current_redundancy - 0.3)
+                if new_redundancy != current_redundancy:
+                    frag_config["redundancy_factor"] = new_redundancy
+                    actions.append(f"减少数据冗余，从{current_redundancy}调整为{new_redundancy}")
+        
+        # 根据错误率调整分片优先级策略
+        if stats["error_rate"] > self.thresholds["error_rate"]["high"]:
+            frag_config["default_strategy"] = "reliable"
+            actions.append("高错误率，分片策略切换为reliable模式")
+        elif stats["error_rate"] < self.thresholds["error_rate"]["low"]:
+            frag_config["default_strategy"] = "fast"
+            actions.append("低错误率，分片策略切换为fast模式")
+        
+        self.network.config.performance_params["fragmentation"] = frag_config
+        return actions
+
+    async def _optimize_connection_management(self, stats: Dict[str, Any]) -> List[str]:
+        """优化连接管理策略"""
+        actions = []
+        current_max_connections = self.network.config.performance_params.get("max_connections", 1000)
+        
+        # 根据节点负载调整最大连接数
+        node_load = stats.get("node_load", 0.5)  # 0-1之间的负载值
+        if node_load > 0.8:  # 高负载
+            new_max = max(500, int(current_max_connections * 0.8))
+            if new_max != current_max_connections:
+                self.network.config.performance_params["max_connections"] = new_max
+                actions.append(f"节点高负载，最大连接数从{current_max_connections}调整为{new_max}")
+                
+                # 主动断开低优先级连接
+                closed_count = await self.network.close_low_priority_connections(percent=20)
+                actions.append(f"主动断开{closed_count}个低优先级连接")
+        
+        elif node_load < 0.3:  # 低负载
+            new_max = min(2000, int(current_max_connections * 1.2))
+            if new_max != current_max_connections:
+                self.network.config.performance_params["max_connections"] = new_max
+                actions.append(f"节点低负载，最大连接数从{current_max_connections}调整为{new_max}")
+        
+        # 根据网络稳定性调整心跳间隔
+        stability = stats.get("stability_score", 0.5)
+        current_heartbeat = self.network.config.heartbeat_interval
+        if stability < 0.5:  # 低稳定性
+            new_interval = max(10, current_heartbeat // 2)
+            if new_interval != current_heartbeat:
+                self.network.config.heartbeat_interval = new_interval
+                actions.append(f"网络稳定性低，心跳间隔从{current_heartbeat}调整为{new_interval}秒")
+        elif stability > 0.8:  # 高稳定性
+            new_interval = min(120, current_heartbeat * 2)
+            if new_interval != current_heartbeat:
+                self.network.config.heartbeat_interval = new_interval
+                actions.append(f"网络稳定性高，心跳间隔从{current_heartbeat}调整为{new_interval}秒")
+        
+        return actions
+
+    def _optimize_crypto_strategy(self, stats: Dict[str, Any]) -> List[str]:
+        """优化加密策略"""
+        actions = []
+        current_level = self.network.config.performance_params.get("encryption_level", "high")
+        
+        # 根据性能和安全性需求平衡加密级别
+        if stats["avg_latency"] > self.thresholds["latency"]["high"] and current_level == "high":
+            # 高延迟且当前为高加密级别，降级以提高性能
+            self.network.config.performance_params["encryption_level"] = "medium"
+            actions.append("高延迟网络，加密级别从high降为medium")
+        
+        elif stats["error_rate"] < self.thresholds["error_rate"]["low"] and current_level != "high":
+            # 低错误率且网络稳定，提高加密级别
+            self.network.config.performance_params["encryption_level"] = "high"
+            actions.append("网络稳定，加密级别提升至high")
+        
+        # 根据节点类型调整混淆级别
+        node_type = self.network.identity.node_type
+        current_obfuscation = self.network.config.performance_params.get("obfuscation_level", "medium")
+        
+        if node_type == NodeType.D_NODE and current_obfuscation != "high":
+            self.network.config.performance_params["obfuscation_level"] = "high"
+            actions.append("D节点提升混淆级别至high")
+        elif node_type == NodeType.U_NODE and current_obfuscation == "high":
+            self.network.config.performance_params["obfuscation_level"] = "medium"
+            actions.append("U节点降低混淆级别至medium")
+        
+        return actions
+
+    def get_optimization_report(self, last_n: int = 10) -> List[Dict[str, Any]]:
+        """获取最近的优化报告"""
+        return list(self.optimization_history)[-last_n:]
+
+    def get_recommendation(self) -> Dict[str, str]:
+        """基于历史优化给出系统改进建议"""
+        if not self.optimization_history:
+            return {"建议": "暂无足够数据生成建议"}
+        
+        # 分析高频优化动作
+        action_counts = defaultdict(int)
+        for record in self.optimization_history:
+            for action in record["actions"]:
+                action_counts[action.split("，")[0]] += 1
+        
+        # 生成建议
+        recommendations = []
+        if len(action_counts) > 0:
+            most_common = max(action_counts.items(), key=lambda x: x[1])
+            if most_common[1] > len(self.optimization_history) * 0.7:
+                recommendations.append(f"系统频繁{most_common[0]}，建议检查相关网络环境")
+        
+        # 基于当前状态给出建议
+        current_stats = self.network.performance_monitor.get_performance_stats()
+        if current_stats.get("avg_latency", 0) > self.thresholds["latency"]["high"]:
+            recommendations.append("当前网络延迟较高，建议优化节点地理位置分布")
+        if current_stats.get("packet_loss", 0) > self.thresholds["packet_loss"]["high"]:
+            recommendations.append("当前网络丢包率较高，建议增加冗余节点")
+        
+        return {"建议": recommendations}
 
 class FaultRecovery:
     """故障恢复"""
