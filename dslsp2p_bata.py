@@ -659,16 +659,16 @@ class DistributedAnonymousNetwork:
         logger.info(f"节点身份生成完成: {self.identity.node_id}")
         
     async def _generate_node_identity(self) -> NodeIdentity:
-        """生成节点身份信息"""
+        """生成节点身份信息，支持从配置文件导入证书"""
         # 生成时间戳和随机数据创建节点ID
         timestamp = int(time.time() * 1000)
         random_data = random.getrandbits(128).to_bytes(16, 'big')
         node_id = hashlib.sha256(f"{timestamp}{random_data}".encode()).hexdigest()[:16]
-    
+
         # 使用pycryptodome生成RSA密钥对
         private_key = RSA.generate(2048)
         public_key = private_key.publickey()
-        
+    
         # 序列化密钥
         priv_pem = private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
@@ -679,13 +679,31 @@ class DistributedAnonymousNetwork:
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
+    
+        # 从配置文件加载证书
+        certificate = None
+        try:
+            # 读取配置中的证书路径
+            security_config = self.config.performance_params.get('security', {})
+            cert_path = security_config.get('certificate_path')
         
+            if cert_path and os.path.exists(cert_path):
+                with open(cert_path, 'rb') as f:
+                    certificate = f.read()
+                logger.info(f"成功从配置文件加载证书: {cert_path}")
+            elif cert_path:
+                logger.warning(f"配置文件中指定的证书路径不存在: {cert_path}")
+            else:
+                logger.info("未在配置文件中指定证书路径，使用无证书模式")
+        except Exception as e:
+            logger.error(f"加载证书时发生错误: {e}")
+
         return NodeIdentity(
             node_id=node_id,
             reputation=1000,
             public_key=pub_pem,
             private_key=priv_pem,
-            certificate=None  # 简化实现，实际应注册证书
+            certificate=certificate  # 使用从配置文件加载的证书
         )
     
     async def _detect_network_environment(self):
@@ -715,21 +733,46 @@ class DistributedAnonymousNetwork:
         }
     
     async def _test_dns_reachability(self) -> Dict[str, Any]:
-        """DNS可达性测试"""
+        """DNS可达性测试，从配置文件获取API信息"""
         try:
-            # 测试阿里云DNS API连通性
+            # 从配置获取DNS API信息，优先使用用户配置，无配置则使用默认值
+            dns_config = self.config.performance_params.get('dns_api', {})
+            api_url = dns_config.get('url', 'http://dns.alidns.com')
+            api_key = dns_config.get('api_key', '')
+            timeout = dns_config.get('timeout', 10)
+        
+            # 构建请求头，包含认证信息
+            headers = {}
+            if api_key:
+                headers['Authorization'] = f"Bearer {api_key}"
+        
+            # 发送测试请求
             async with aiohttp.ClientSession() as session:
-                # 这里简化实现，实际应调用阿里云DNS API
-                resp = await session.get(f"http://dns.alidns.com", timeout=10)
-                success = resp.status == 200
+                resp = await session.get(
+                    api_url,
+                    headers=headers,
+                    timeout=timeout
+                )
+                success = 200 <= resp.status < 300  # 2xx状态码视为成功
+            
+                # 记录详细响应信息
+                details = {
+                    "status": resp.status,
+                    "api_url": api_url,
+                    "response_time": round(resp.headers.get('X-Response-Time', 0), 2)
+                }
                 
             return {
                 "success": success,
-                "details": "DNS API测试完成"
+                "details": details
             }
         except Exception as e:
             logger.warning(f"DNS可达性测试失败: {e}")
-            return {"success": False, "error": str(e)}
+            return {
+                "success": False,
+                "error": str(e),
+                "configured_api": self.config.performance_params.get('dns_api', {}).get('url')
+            }
     
     async def _test_upnp_capability(self) -> Dict[str, Any]:
         """UPnP能力检测"""
