@@ -23,6 +23,7 @@ import queue
 import http.server
 import socketserver
 import ssl
+import html
 from http import HTTPStatus
 
 # 浏览器渲染相关
@@ -515,139 +516,8 @@ class AnonymousWebClient:
                 'loaded_with_browser': False
             }
 
-class P2PProxyHandler(http.server.SimpleHTTPRequestHandler):
-    """P2P代理HTTP处理器"""
-    
-    def __init__(self, *args, node=None, **kwargs):
-        self.node = node
-        super().__init__(*args, **kwargs)
-    
-    def do_GET(self):
-        """处理GET请求"""
-        try:
-            # 解析请求的URL
-            if self.path.startswith('/http://') or self.path.startswith('/https://'):
-                target_url = self.path[1:]  # 去掉开头的/
-            elif '?url=' in self.path:
-                # 从查询参数获取URL
-                import urllib.parse
-                parsed = urllib.parse.urlparse(self.path)
-                query_params = urllib.parse.parse_qs(parsed.query)
-                target_url = query_params.get('url', [''])[0]
-            else:
-                # 默认行为，显示使用说明
-                self.send_response(200)
-                self.send_header('Content-type', 'text/html')
-                self.end_headers()
-                self.wfile.write(b"""
-                <html><body>
-                <h1>P2P Browser Proxy</h1>
-                <p>Usage:</p>
-                <ul>
-                <li>Access any site: http://localhost:8080/http://example.com</li>
-                <li>Or use query parameter: http://localhost:8080/?url=http://example.com</li>
-                </ul>
-                </body></html>
-                """)
-                return
-            
-            if not target_url:
-                self.send_error(400, "Missing URL parameter")
-                return
-            
-            get_logger().log(f"[代理] 请求URL: {target_url}")
-            
-            # 通过P2P网络获取页面（使用浏览器渲染）
-            result = self.node.request_web_page_distributed(target_url, use_browser=True)
-            
-            if result and result.get('success'):
-                content = result.get('content', b'')
-                
-                # 发送响应
-                self.send_response(200)
-                self.send_header('Content-type', 'text/html; charset=utf-8')
-                self.send_header('Content-Length', str(len(content)))
-                self.end_headers()
-                self.wfile.write(content)
-                
-                get_logger().log(f"[代理] 成功返回: {len(content)} 字节")
-            else:
-                error_msg = result.get('error', 'Unknown error') if result else 'No response'
-                self.send_error(502, f"P2P fetch failed: {error_msg}")
-                get_logger().log(f"[代理] 获取失败: {error_msg}")
-                
-        except Exception as e:
-            self.send_error(500, f"Server error: {str(e)}")
-            get_logger().log(f"[代理错误] {e}")
-    
-    def log_message(self, format, *args):
-        """重写日志方法，使用我们的日志系统"""
-        get_logger().log(f"[HTTP] {format % args}")
-
-class P2PProxyServer:
-    """P2P代理服务器"""
-    
-    def __init__(self, node, host='localhost', port=8080, https_port=8443, ssl_certfile=None, ssl_keyfile=None):
-        self.node = node
-        self.host = host
-        self.port = port
-        self.https_port = https_port
-        self.ssl_certfile = ssl_certfile
-        self.ssl_keyfile = ssl_keyfile
-        self.http_server = None
-        self.https_server = None
-        self.running = False
-    
-    def start(self):
-        """启动代理服务器"""
-        # 启动HTTP服务器
-        handler = lambda *args, **kwargs: P2PProxyHandler(*args, node=self.node, **kwargs)
-        self.http_server = socketserver.TCPServer((self.host, self.port), handler)
-        http_thread = threading.Thread(target=self._serve_http, daemon=True)
-        http_thread.start()
-        get_logger().log(f"[代理] HTTP代理服务器启动在 http://{self.host}:{self.port}")
-        
-        # 如果提供了SSL证书，启动HTTPS服务器
-        if self.ssl_certfile and self.ssl_keyfile and os.path.exists(self.ssl_certfile) and os.path.exists(self.ssl_keyfile):
-            self.https_server = socketserver.TCPServer((self.host, self.https_port), handler)
-            self.https_server.socket = ssl.wrap_socket(
-                self.https_server.socket,
-                keyfile=self.ssl_keyfile,
-                certfile=self.ssl_certfile,
-                server_side=True
-            )
-            https_thread = threading.Thread(target=self._serve_https, daemon=True)
-            https_thread.start()
-            get_logger().log(f"[代理] HTTPS代理服务器启动在 https://{self.host}:{self.https_port}")
-        else:
-            get_logger().log("[代理] 未找到SSL证书，HTTPS服务未启动")
-        
-        self.running = True
-    
-    def _serve_http(self):
-        """运行HTTP服务器"""
-        try:
-            self.http_server.serve_forever()
-        except Exception as e:
-            get_logger().log(f"[代理错误] HTTP服务器错误: {e}")
-    
-    def _serve_https(self):
-        """运行HTTPS服务器"""
-        try:
-            self.https_server.serve_forever()
-        except Exception as e:
-            get_logger().log(f"[代理错误] HTTPS服务器错误: {e}")
-    
-    def stop(self):
-        """停止代理服务器"""
-        self.running = False
-        if self.http_server:
-            self.http_server.shutdown()
-        if self.https_server:
-            self.https_server.shutdown()
-
 class AnonymousP2PNode:
-    """增强的匿名P2P节点 - 支持分布式浏览器渲染"""
+    """匿名P2P节点 - 简化版本"""
     
     def __init__(self, node_id=None, tcp_port=8889, udp_port=8888, enable_browser=True):
         self.node_id = node_id or self._generate_node_id()
@@ -664,7 +534,7 @@ class AnonymousP2PNode:
         self.known_nodes = {}
         self.active_requests = {}
         self.pending_responses = {}
-        self.pending_chunks = defaultdict(dict)  # {request_id: {chunk_index: [node_ids]}}
+        self.pending_chunks = defaultdict(dict)
         self.render_results = {}
         self.node_counter = 0
         
@@ -687,6 +557,11 @@ class AnonymousP2PNode:
         """生成节点ID"""
         return f"node_{int(time.time())}_{random.randint(1000, 9999)}"
     
+    def _get_total_node_count(self):
+        """获取网络中节点总数（包括自身）"""
+        # known_nodes存储的是其他节点，所以总数=已知节点数+1（自身）
+        return len(self.known_nodes) + 1
+
     def start(self):
         """启动节点"""
         self.running = True
@@ -756,15 +631,9 @@ class AnonymousP2PNode:
         """定期广播节点信息"""
         time.sleep(2)
         
-        broadcast_count = 0
         while self.running:
             try:
                 self._broadcast_presence()
-                broadcast_count += 1
-                
-                if broadcast_count % 10 == 0:
-                    get_logger().log(f"[广播] 已发送 {broadcast_count} 次广播，发现 {len(self.known_nodes)} 个节点")
-                
                 time.sleep(5)
             except Exception as e:
                 if self.running:
@@ -798,6 +667,10 @@ class AnonymousP2PNode:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             
+            browser_available = False
+            if self.enable_browser and self.browser_engine:
+                browser_available = self.browser_engine.initialized
+            
             message = {
                 'type': 'node_announce',
                 'node_id': self.node_id,
@@ -805,7 +678,7 @@ class AnonymousP2PNode:
                 'tcp_port': self.tcp_port,
                 'timestamp': time.time(),
                 'capabilities': {
-                    'browser_engine': self.enable_browser and self.browser_engine and self.browser_engine.initialized
+                    'browser_engine': browser_available
                 }
             }
             
@@ -926,26 +799,87 @@ class AnonymousP2PNode:
         try:
             if msg_type == MessageType.ANON_REQUEST.value:
                 self._handle_anon_request(data, sock, addr)
-            elif msg_type == MessageType.ANON_RESPONSE.value:
-                self._handle_anon_response(data, sock, addr)
             elif msg_type == MessageType.RENDER_REQUEST.value:
                 self._handle_render_request(data, sock, addr)
-            elif msg_type == MessageType.RENDER_RESPONSE.value:
-                self._handle_render_response(data, sock, addr)
             elif msg_type == MessageType.CHUNK_RESPONSE.value:
                 self._handle_chunk_response(data, sock, addr)
             elif msg_type == MessageType.CHUNK_REQUEST.value:
                 self._handle_chunk_request(data, sock, addr)
-            elif msg_type == MessageType.DATA_RELAY.value:
-                self._handle_data_relay(data, sock, addr)
-            elif msg_type == MessageType.HEARTBEAT.value:
-                self._handle_heartbeat(data, sock, addr)
+            elif msg_type == MessageType.RENDER_RESPONSE.value:  # 新增
+                self._handle_render_response(data, sock, addr)
             else:
                 get_logger().log(f"[警告] 未知消息类型: {msg_type}")
-                
+            
         except Exception as e:
             get_logger().log(f"[处理错误] TCP消息处理失败: {e}")
+
+    def _handle_render_response(self, data, sock, addr):
+        """处理渲染响应"""
+        try:
+            response = json.loads(data.decode())
+            request_id = response.get('request_id')
+            
+            get_logger().log(f"[渲染响应] 收到渲染元数据: {response.get('url', 'Unknown')}")
+            
+            # 存储渲染元数据
+            if request_id not in self.render_results:
+                self.render_results[request_id] = {}
+            self.render_results[request_id].update(response)
+            
+        except Exception as e:
+            get_logger().log(f"[渲染响应错误] 处理失败: {e}")
     
+    def _handle_chunk_request(self, data, sock, addr):
+        """处理块请求"""
+        try:
+            request = json.loads(data.decode())
+            request_id = request.get('request_id')
+            chunk_index = request.get('chunk_index')
+            requester_node = request.get('requester_node')
+
+            get_logger().log(f"[块请求] 节点 {requester_node} 请求块 {chunk_index} (request_id: {request_id})")
+
+            # 检查块是否存在（补充日志便于排查）
+            if request_id not in self.chunk_manager.chunk_storage:
+                get_logger().log(f"[块请求] 未找到request_id: {request_id} 的块存储")
+                return
+            if chunk_index not in self.chunk_manager.chunk_storage[request_id]:
+                get_logger().log(f"[块请求] request_id: {request_id} 中无块 {chunk_index}")
+                return
+        
+            # 检查是否有所请求的块
+            if (request_id in self.chunk_manager.chunk_storage and 
+                chunk_index in self.chunk_manager.chunk_storage[request_id]):
+            
+                chunk_data = self.chunk_manager.chunk_storage[request_id][chunk_index]
+            
+                # 重新创建块信息
+                chunk_info = {
+                    'request_id': request_id,
+                    'chunk_index': chunk_index,
+                    'total_chunks': len(self.chunk_manager.chunk_storage[request_id]),
+                    'data': chunk_data.hex(),
+                    'data_size': len(chunk_data),
+                    'hash': hashlib.md5(chunk_data).hexdigest()
+                }
+            
+                # 发送块给请求者
+                chunk_response = {
+                    'chunk_data': chunk_info,
+                    'target_node': requester_node  # 指定目标节点
+                }
+            
+                response_bytes = json.dumps(chunk_response).encode()
+                message = AnonP2PProtocol.create_message(MessageType.CHUNK_RESPONSE, response_bytes)
+                sock.send(message)
+            
+                get_logger().log(f"[块请求] 已发送块 {chunk_index} 到 {requester_node}")
+            else:
+                get_logger().log(f"[块请求] 没有找到请求的块")
+            
+        except Exception as e:
+            get_logger().log(f"[块请求错误] 处理失败: {e}")
+
     def _handle_anon_request(self, data, sock, addr):
         """处理匿名请求"""
         try:
@@ -955,12 +889,8 @@ class AnonymousP2PNode:
             use_browser = request.get('use_browser', False)
             request_id = request.get('request_id')
             return_address = request.get('return_address', {})
-            distributed = request.get('distributed', False)
             
             get_logger().log(f"[请求] 来自 {client_node}: {url}")
-            
-            if use_browser and self.browser_engine and self.browser_engine.initialized:
-                get_logger().log(f"[请求] 使用浏览器引擎加载")
             
             # 获取网页内容
             web_result = self.web_client.fetch_anonymously(url, use_browser=use_browser)
@@ -974,86 +904,42 @@ class AnonymousP2PNode:
             }
             
             if web_result['success']:
-                # 如果启用分布式模式，将内容分块
-                if distributed and len(web_result['content']) > 1024:
-                    chunks = self.chunk_manager.split_content(web_result['content'], request_id)
-                    
-                    # 分发块到多个节点
-                    if return_address:
-                        self._distribute_chunks(chunks, request_id, return_address)
-                    
-                    response_data.update({
-                        'distributed': True,
-                        'total_chunks': len(chunks),
-                        'content_type': web_result['content_type']
-                    })
-                    get_logger().log(f"[分布式] 内容已分割为 {len(chunks)} 个块")
-                else:
-                    # 直接发送内容
-                    response_data.update({
-                        'content': web_result['content'].hex(),
-                        'content_type': web_result['content_type'],
-                        'title': web_result.get('title', '')
-                    })
-                    load_method = "浏览器" if web_result.get('loaded_with_browser') else "普通"
-                    get_logger().log(f"[请求] {load_method}方式获取成功: {len(web_result['content'])} 字节")
+                response_data.update({
+                    'content': web_result['content'].hex(),
+                    'content_type': web_result['content_type'],
+                    'title': web_result.get('title', '')
+                })
+                load_method = "浏览器" if web_result.get('loaded_with_browser') else "普通"
+                get_logger().log(f"[请求] {load_method}方式获取成功: {len(web_result['content'])} 字节")
             else:
                 response_data.update({
                     'error': web_result.get('error', 'Unknown error')
                 })
                 get_logger().log(f"[请求] 获取失败: {web_result.get('error')}")
             
-            # 如果有返回地址，直接发送响应
-            if return_address:
-                target_node_id = return_address.get('node_id')
-                if target_node_id:
-                    self._send_to_node(target_node_id, MessageType.ANON_RESPONSE, response_data)
-                    get_logger().log(f"[响应] 已发送响应到 {target_node_id}")
-                else:
-                    # 回退到原连接发送
-                    response_bytes = json.dumps(response_data).encode()
-                    message = AnonP2PProtocol.create_message(MessageType.ANON_RESPONSE, response_bytes)
-                    sock.send(message)
-            else:
-                # 原连接发送
-                response_bytes = json.dumps(response_data).encode()
-                message = AnonP2PProtocol.create_message(MessageType.ANON_RESPONSE, response_bytes)
-                sock.send(message)
+            # 发送响应
+            response_bytes = json.dumps(response_data).encode()
+            message = AnonP2PProtocol.create_message(MessageType.ANON_RESPONSE, response_bytes)
+            sock.send(message)
             
         except Exception as e:
             get_logger().log(f"[请求错误] 处理失败: {e}")
     
-    def _handle_anon_response(self, data, sock, addr):
-        """处理匿名响应"""
+    def _send_directly(self, ip, port, msg_type, data):
+        """直接向指定IP:端口发送消息（完善原有方法）"""
         try:
-            response = json.loads(data.decode())
-            request_id = response.get('request_id')
-            
-            get_logger().log(f"[响应] 收到响应 (ID: {request_id})")
-            
-            if request_id in self.pending_responses:
-                # 如果是分布式响应，设置事件通知
-                if response.get('distributed', False):
-                    self.pending_responses[request_id]['distributed'] = True
-                    self.pending_responses[request_id]['total_chunks'] = response.get('total_chunks', 0)
-                    get_logger().log(f"[响应] 分布式响应，等待 {response.get('total_chunks')} 个块")
-                else:
-                    # 转换十六进制内容回字节
-                    if response.get('success') and 'content' in response:
-                        response['content'] = bytes.fromhex(response['content'])
-                    
-                    self.pending_responses[request_id]['response'] = response
-                    self.pending_responses[request_id]['event'].set()
-                    
-                    get_logger().log(f"[响应] 响应已处理: {response.get('url')}")
-            else:
-                get_logger().log(f"[响应] 未知的请求ID: {request_id}")
-                
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((ip, port))
+            message = AnonP2PProtocol.create_message(msg_type, data)
+            sock.sendall(message)
+            sock.close()
+            return True
         except Exception as e:
-            get_logger().log(f"[响应错误] 处理失败: {e}")
-    
+            get_logger().log(f"[直接发送失败] {ip}:{port} - {e}")
+            return False
+
     def _handle_render_request(self, data, sock, addr):
-        """处理渲染请求"""
+        """处理渲染请求（修改版：根据节点数切换模式）"""
         try:
             request = json.loads(data.decode())
             url = request.get('url')
@@ -1061,205 +947,196 @@ class AnonymousP2PNode:
             client_node = request.get('client_node')
             return_address = request.get('return_address')
             
-            get_logger().log(f"[渲染] 收到渲染请求: {url} (ID: {request_id})")
-            get_logger().log(f"[渲染] 客户端: {client_node}, 返回地址: {return_address}")
-            
+            get_logger().log(f"[渲染] 收到渲染请求: {url}")
+
+            # 获取节点总数并判断处理模式
+            total_nodes = self._get_total_node_count()
+            get_logger().log(f"[节点模式] 总节点数: {total_nodes}, 切换至{'多节点' if total_nodes >=3 else '单节点'}模式")
+
             if not self.browser_engine or not self.browser_engine.initialized:
-                # 回退到普通模式
-                get_logger().log(f"[渲染] ✗ 浏览器引擎不可用，状态: {self.browser_engine.initialized if self.browser_engine else '未创建'}")
+                get_logger().log(f"[渲染] 浏览器不可用，回退到普通模式")
+                # 普通模式处理（保持原有逻辑）
                 normal_request = {
                     'url': url,
                     'client_node': client_node,
                     'request_id': request_id,
                     'return_address': return_address,
-                    'distributed': True
+                    'use_browser': False
                 }
                 self._handle_anon_request(json.dumps(normal_request).encode(), sock, addr)
                 return
-            
-            # 执行浏览器渲染
-            render_result = self.browser_engine.render_page_distributed(url, request_id)
 
-            get_logger().log(f"[渲染] ✓ 浏览器引擎可用，开始渲染...")
+            # 单节点模式：自身处理全部任务
+            if total_nodes <= 3:
+                # 已有的渲染逻辑
+                page_data = self.browser_engine.render_page_distributed(url, request_id)
+                if not page_data:
+                    # 发送渲染失败响应
+                    error_resp = {
+                        'request_id': request_id,
+                        'success': False,
+                        'error': 'Render failed'
+                    }
+                    self._send_directly(return_address['ip'], return_address['port'], 
+                                      MessageType.RENDER_RESPONSE, json.dumps(error_resp).encode())
+                    return
 
-            if render_result:
-                # 将渲染结果分块分发
-                get_logger().log(f"[渲染] ✓ 渲染成功，开始分块分发")
-                html_content = bytes.fromhex(render_result['html'])
-                chunks = self.chunk_manager.split_content(html_content, request_id)
-                
-                # 分发块到多个节点
-                self._distribute_chunks(chunks, request_id, return_address)
-                
-                # 发送渲染元数据
-                render_response = {
+                # 将page_data序列化为二进制，准备分割为块
+                page_data_bytes = json.dumps(page_data).encode()  # 序列化渲染结果
+                # 用ChunkManager分割为块并存储
+                chunks = self.chunk_manager.split_content(page_data_bytes, request_id)
+                # 存储块到chunk_storage（split_content已内部处理存储）
+
+                # 发送渲染元数据（包含块分布信息）给客户端
+                render_resp = {
                     'request_id': request_id,
                     'success': True,
-                    'url': render_result['url'],
-                    'title': render_result['title'],
-                    'resources': render_result['resources'],
-                    'total_chunks': len(chunks),
-                    'content_type': 'text/html',
-                    'loaded_with_browser': True
+                    'url': page_data['url'],
+                    'title': page_data['title'],
+                    'total_chunks': len(chunks),  # 告诉客户端总块数
+                    'node_id': self.node_id
                 }
-                
-                self._send_to_node(return_address['node_id'], MessageType.RENDER_RESPONSE, render_response)
-                get_logger().log(f"[渲染] 渲染完成，分发 {len(chunks)} 个块")
-                
+                self._send_directly(return_address['ip'], return_address['port'],
+                                  MessageType.RENDER_RESPONSE, json.dumps(render_resp).encode())
+
+            # 多节点模式：拆分子任务分配
             else:
-                get_logger().log(f"[渲染] ✗ 渲染失败")
-                error_response = {
-                    'request_id': request_id,
-                    'success': False,
-                    'error': '渲染失败'
-                }
-                self._send_to_node(return_address['node_id'], MessageType.RENDER_RESPONSE, error_response)
-                get_logger().log(f"[渲染] 渲染失败")
+                get_logger().log(f"[多节点模式] 拆分任务分配给其他节点")
+                # 1. 拆分任务
+                task_assignments = self._split_tasks_for_multi_node(url, request_id)
                 
+                # 2. 向分配的节点发送任务
+                for node_id, task in task_assignments.items():
+                    if node_id == self.node_id:
+                        # 自身处理的任务
+                        render_result = self.browser_engine.render_page_distributed(url, request_id)
+                        if render_result:
+                            html_content = bytes.fromhex(render_result['html'])
+                            chunks = self.chunk_manager.split_content(html_content, request_id)
+                            self._distribute_chunks(chunks, request_id, return_address)
+                    else:
+                        # 向其他节点发送任务请求
+                        node_ip, node_port, _, _ = self.known_nodes[node_id]
+                        task_data = {
+                            "task": task,
+                            "request_id": request_id,
+                            "client_node": self.node_id,
+                            "return_address": {
+                                "node_id": self.node_id,
+                                "ip": NetworkHelper.get_local_ip(),
+                                "port": self.tcp_port
+                            }
+                        }
+                        # 发送渲染任务请求
+                        self._send_directly(
+                            node_ip,
+                            node_port,
+                            MessageType.RENDER_REQUEST,
+                            json.dumps(task_data).encode()
+                        )
+                # 3. 发送初始响应告知客户端任务已分配
+                self._send_to_node(
+                    return_address['node_id'],
+                    MessageType.RENDER_RESPONSE,
+                    {
+                        'request_id': request_id,
+                        'success': True,
+                        'status': 'tasks_distributed',
+                        'total_nodes': total_nodes
+                    }
+                )
+
         except Exception as e:
             get_logger().log(f"[渲染错误] 处理失败: {e}")
-            import traceback
-            get_logger().log(f"[渲染错误] 详细: {traceback.format_exc()}")
-    
-    def _handle_render_response(self, data, sock, addr):
-        """处理渲染响应"""
-        try:
-            response = json.loads(data.decode())
-            request_id = response.get('request_id')
-            
-            get_logger().log(f"[渲染响应] 收到渲染元数据 (ID: {request_id})")
-            
-            # 存储渲染结果
-            self.render_results[request_id] = response
-            
-        except Exception as e:
-            get_logger().log(f"[渲染响应错误] 处理失败: {e}")
     
     def _handle_chunk_response(self, data, sock, addr):
-        """处理块响应"""
+        """修复的块响应处理"""
         try:
             chunk_data = json.loads(data.decode())
-            
+        
             if 'chunk_data' in chunk_data:
-                # 这是实际的块数据
+                # 检查是否需要转发
                 chunk_info = chunk_data['chunk_data']
                 request_id = chunk_info['request_id']
-                
-                # 存储块
+                target_node = chunk_data.get('target_node')
+            
+                # 如果这个块不是给本节点的，转发给目标节点
+                if target_node and target_node != self.node_id:
+                    get_logger().log(f"[块转发] 转发块 {chunk_info['chunk_index']} 到 {target_node}")
+                    self._send_to_node(target_node, MessageType.CHUNK_RESPONSE, chunk_data)
+                    return
+            
+                # 存储块到本地
                 success = self.chunk_manager.add_chunk(chunk_info)
                 if success:
                     get_logger().log(f"[块] 接收并存储块 {chunk_info['chunk_index']+1}/{chunk_info['total_chunks']}")
-                    
-                    # 如果这是最后一个块，通知等待的请求
-                    if self.chunk_manager.is_request_complete(request_id, chunk_info['total_chunks']):
-                        if request_id in self.pending_responses:
-                            completed_content = self.chunk_manager.get_completed_content(request_id)
-                            if completed_content:
-                                response = {
-                                    'success': True,
-                                    'content': completed_content,
-                                    'url': f"chunked_{request_id}",
-                                    'content_type': 'application/octet-stream',
-                                    'loaded_with_browser': False
-                                }
-                                self.pending_responses[request_id]['response'] = response
-                                self.pending_responses[request_id]['event'].set()
-                                get_logger().log(f"[块] 所有块接收完成: {request_id}")
                 else:
                     get_logger().log(f"[块] 块验证失败")
-                    
+                
             elif 'chunk_nodes' in chunk_data:
-                # 这是块分布图
+                # 块分布图处理保持不变
                 request_id = chunk_data['request_id']
                 chunk_nodes = chunk_data['chunk_nodes']
-                
-                # 更新待处理块信息
+            
                 self.pending_chunks[request_id] = chunk_nodes
                 get_logger().log(f"[块] 收到块分布图，共 {chunk_data['total_chunks']} 个块")
-                
+            
+                # 立即开始请求缺失的块
+                self._request_missing_chunks(request_id)
+            
         except Exception as e:
             get_logger().log(f"[块错误] 处理失败: {e}")
     
-    def _handle_chunk_request(self, data, sock, addr):
-        """处理块请求"""
-        try:
-            request = json.loads(data.decode())
-            request_id = request.get('request_id')
-            chunk_index = request.get('chunk_index')
-            return_address = request.get('return_address')
-            
-            # 检查是否有这个块
-            if (request_id in self.chunk_manager.chunk_storage and 
-                chunk_index in self.chunk_manager.chunk_storage[request_id]):
-                
-                chunk_data = self.chunk_manager.chunk_storage[request_id][chunk_index]
-                chunk_info = {
-                    'request_id': request_id,
-                    'chunk_index': chunk_index,
-                    'total_chunks': len(self.chunk_manager.chunk_storage[request_id]),
-                    'data': chunk_data.hex(),
-                    'data_size': len(chunk_data),
-                    'hash': hashlib.md5(chunk_data).hexdigest()
-                }
-                
-                chunk_response = {
-                    'chunk_data': chunk_info
-                }
-                
-                self._send_to_node(return_address['node_id'], MessageType.CHUNK_RESPONSE, chunk_response)
-                get_logger().log(f"[块] 发送块 {chunk_index} 到 {return_address['node_id']}")
-                
-        except Exception as e:
-            get_logger().log(f"[块错误] 处理请求失败: {e}")
+    def _request_missing_chunks(self, request_id):
+        """主动请求缺失的块"""
+        if request_id not in self.pending_chunks:
+            return
     
-    def _handle_data_relay(self, data, sock, addr):
-        """处理数据中继"""
-        try:
-            relay_msg = json.loads(data.decode())
-            target_node = relay_msg.get('target_node')
-            
-            get_logger().log(f"[中继] 目标: {target_node}")
-            
-            if target_node == self.node_id:
-                get_logger().log(f"[中继] 目标为本节点")
-                return
-            
-            if target_node in self.known_nodes:
-                node_ip, node_port, _, _ = self.known_nodes[target_node]
-                self._send_to_node(target_node, MessageType.DATA_RELAY, relay_msg)
-                get_logger().log(f"[中继] 转发到: {target_node}")
-            else:
-                get_logger().log(f"[中继错误] 未知目标: {target_node}")
-                
-        except Exception as e:
-            get_logger().log(f"[中继错误] 处理失败: {e}")
+        chunk_nodes = self.pending_chunks[request_id]
+        total_chunks = len(chunk_nodes)
     
-    def _handle_heartbeat(self, data, sock, addr):
-        """处理心跳"""
-        try:
-            heartbeat = json.loads(data.decode())
-            node_id = heartbeat.get('node_id')
-            
-            if node_id in self.known_nodes:
-                ip, port, _, caps = self.known_nodes[node_id]
-                self.known_nodes[node_id] = (ip, port, time.time(), caps)
-            
-            response = {'node_id': self.node_id}
-            response_bytes = json.dumps(response).encode()
-            message = AnonP2PProtocol.create_message(MessageType.HEARTBEAT, response_bytes)
-            sock.send(message)
-            
-        except Exception as e:
-            get_logger().log(f"[心跳错误] 处理失败: {e}")
+        # 检查哪些块缺失
+        missing_chunks = []
+        for chunk_index in range(total_chunks):
+            if not self._has_chunk(request_id, chunk_index):
+                missing_chunks.append(chunk_index)
     
+        if not missing_chunks:
+            get_logger().log(f"[块] 所有块已就绪")
+            return
+    
+        get_logger().log(f"[块] 请求缺失的块: {missing_chunks}")
+    
+        # 向持有缺失块的节点请求
+        for chunk_index in missing_chunks:
+            if chunk_index in chunk_nodes:
+                holding_nodes = chunk_nodes[chunk_index]
+                if holding_nodes:
+                    target_node = random.choice(holding_nodes)
+                    if target_node != self.node_id:  # 不向自己请求
+                        chunk_request = {
+                            'request_id': request_id,
+                            'chunk_index': chunk_index,
+                            'requester_node': self.node_id
+                        }
+                        self._send_to_node(target_node, MessageType.CHUNK_REQUEST, chunk_request)
+
+    def _has_chunk(self, request_id, chunk_index):
+        return (request_id in self.chunk_manager.chunk_storage and 
+                chunk_index in self.chunk_manager.chunk_storage[request_id])
+
     def _distribute_chunks(self, chunks, request_id, return_address):
         """分发块到多个节点"""
         chunk_nodes = {}
+        available_nodes = list(self.known_nodes.keys())
+        
+        # 移除目标节点，避免向请求者自己发送块
+        if return_address['node_id'] in available_nodes:
+            available_nodes.remove(return_address['node_id'])
         
         for chunk_index, chunk_info in chunks.items():
-            # 选择3个随机节点存储这个块
-            available_nodes = list(self.known_nodes.keys())
-            if len(available_nodes) > 3:
+            # 选择不同的节点
+            if len(available_nodes) >= 3:
                 selected_nodes = random.sample(available_nodes, 3)
             else:
                 selected_nodes = available_nodes
@@ -1275,7 +1152,7 @@ class AnonymousP2PNode:
                 }
                 self._send_to_node(node_id, MessageType.CHUNK_RESPONSE, chunk_relay)
         
-        # 通知客户端哪些节点有哪个块
+        # 发送块分布图
         chunk_map = {
             'request_id': request_id,
             'chunk_nodes': chunk_nodes,
@@ -1318,32 +1195,44 @@ class AnonymousP2PNode:
         
         request_id = f"req_{int(time.time())}_{random.randint(1000, 9999)}"
         
-        if use_browser and self.browser_engine and self.browser_engine.initialized:
-            # 浏览器渲染模式
-            return self._request_browser_render(url, request_id)
-        else:
-            # 普通分布式模式
-            return self._request_distributed_fetch(url, request_id)
-    
-    def _request_browser_render(self, url, request_id):
-        """请求浏览器渲染"""
-        # 选择具有浏览器能力的节点
-        browser_nodes = []
-        for node_id, (ip, port, last_seen, capabilities) in self.known_nodes.items():
-            if capabilities.get('browser_engine', False):
-                browser_nodes.append(node_id)
+        if use_browser:
+            # 选择具有浏览器能力的节点
+            browser_nodes = []
+            for node_id, (ip, port, last_seen, capabilities) in self.known_nodes.items():
+                if capabilities.get('browser_engine', False):
+                    browser_nodes.append(node_id)
+            
+            if browser_nodes:
+                # 随机选择浏览器节点
+                target_node = random.choice(browser_nodes)
+                
+                render_request = {
+                    'url': url,
+                    'request_id': request_id,
+                    'client_node': self.node_id,
+                    'return_address': {
+                        'node_id': self.node_id,
+                        'ip': NetworkHelper.get_local_ip(),
+                        'port': self.tcp_port
+                    }
+                }
+                
+                # 发送渲染请求
+                success = self._send_to_node(target_node, MessageType.RENDER_REQUEST, render_request)
+                
+                if success:
+                    get_logger().log(f"[渲染] 渲染请求已发送到 {target_node}")
+                    # 等待渲染结果
+                    return self._wait_for_render_result(request_id)
         
-        if not browser_nodes:
-            get_logger().log("[错误] 没有可用的浏览器节点")
-            return self._request_distributed_fetch(url, request_id)
+        # 回退到普通分布式模式
+        target_node = random.choice(list(self.known_nodes.keys()))
         
-        # 随机选择浏览器节点
-        target_node = random.choice(browser_nodes)
-        
-        render_request = {
+        fetch_request = {
             'url': url,
             'request_id': request_id,
             'client_node': self.node_id,
+            'use_browser': False,
             'return_address': {
                 'node_id': self.node_id,
                 'ip': NetworkHelper.get_local_ip(),
@@ -1351,53 +1240,65 @@ class AnonymousP2PNode:
             }
         }
         
-        # 创建响应等待事件
-        response_event = threading.Event()
-        self.pending_responses[request_id] = {
-            'event': response_event,
-            'response': None,
-            'distributed': False
-        }
-        
-        # 发送渲染请求
-        success = self._send_to_node(target_node, MessageType.RENDER_REQUEST, render_request)
-        
-        if success:
-            get_logger().log(f"[渲染] 渲染请求已发送到 {target_node}")
-            # 等待渲染结果
-            return self._wait_for_render_result(request_id, response_event)
-        return None
-    
-    def _request_distributed_fetch(self, url, request_id):
-        """分布式获取网页"""
-        # 通过随机节点发起请求
-        target_node = random.choice(list(self.known_nodes.keys()))
-        
-        fetch_request = {
-            'url': url,
-            'request_id': request_id,
-            'client_node': self.node_id,
-            'return_address': {
-                'node_id': self.node_id,
-                'ip': NetworkHelper.get_local_ip(),
-                'port': self.tcp_port
-            },
-            'distributed': True  # 启用分布式模式
-        }
-        
-        # 创建响应等待事件
-        response_event = threading.Event()
-        self.pending_responses[request_id] = {
-            'event': response_event,
-            'response': None,
-            'distributed': False
-        }
-        
         success = self._send_to_node(target_node, MessageType.ANON_REQUEST, fetch_request)
         
         if success:
             get_logger().log(f"[分布式] 请求已发送到 {target_node}")
-            return self._wait_for_distributed_result(request_id, response_event)
+            return self._wait_for_distributed_result(request_id)
+        return None
+    
+    def _wait_for_render_result(self, request_id, timeout=60):
+        """改进的等待渲染结果机制"""
+        start_time = time.time()
+        last_check = 0
+    
+        while time.time() - start_time < timeout:
+            current_time = time.time()
+        
+            # 每5秒检查一次缺失的块并主动请求
+            if current_time - last_check > 5:
+                self._request_missing_chunks(request_id)
+                last_check = current_time
+            
+                # 打印进度
+                if request_id in self.pending_chunks:
+                    total_chunks = len(self.pending_chunks[request_id])
+                    received_chunks = len(self.chunk_manager.chunk_storage.get(request_id, {}))
+                    get_logger().log(f"[进度] 块接收: {received_chunks}/{total_chunks}")
+        
+            # 检查块是否完成
+            completed_content = self.chunk_manager.get_completed_content(request_id)
+            if completed_content:
+                get_logger().log(f"[成功] 所有块接收完成，内容大小: {len(completed_content)} 字节")
+                return {
+                    'success': True,
+                    'content': completed_content,
+                    'content_type': 'text/html',
+                    'loaded_with_browser': True
+                }
+        
+            time.sleep(0.5)
+    
+        get_logger().log(f"[超时] 等待渲染结果超时")
+        return None
+    
+    def _wait_for_distributed_result(self, request_id, timeout=60):
+        """等待分布式结果"""
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            # 检查块是否完成
+            completed_content = self.chunk_manager.get_completed_content(request_id)
+            if completed_content:
+                return {
+                    'success': True,
+                    'content': completed_content,
+                    'content_type': 'application/octet-stream',
+                    'loaded_with_browser': False
+                }
+            
+            time.sleep(0.5)
+        
         return None
     
     def fetch_resource_distributed(self, url, resource_id):
@@ -1411,135 +1312,21 @@ class AnonymousP2PNode:
             'url': url,
             'request_id': resource_id,
             'client_node': self.node_id,
-            'resource_type': 'asset',
+            'use_browser': False,
             'return_address': {
                 'node_id': self.node_id,
                 'ip': NetworkHelper.get_local_ip(),
                 'port': self.tcp_port
-            },
-            'distributed': True
-        }
-        
-        # 创建响应等待事件
-        response_event = threading.Event()
-        self.pending_responses[resource_id] = {
-            'event': response_event,
-            'response': None,
-            'distributed': False
+            }
         }
         
         success = self._send_to_node(target_node, MessageType.ANON_REQUEST, resource_request)
         
         if success:
-            result = self._wait_for_distributed_result(resource_id, response_event)
+            result = self._wait_for_distributed_result(resource_id)
             if result and result.get('success'):
                 return result.get('content', b'')
         return None
-    
-    def _wait_for_render_result(self, request_id, response_event, timeout=60):
-        """等待渲染结果"""
-        start_time = time.time()
-        
-        while time.time() - start_time < timeout:
-            # 检查是否收到渲染响应
-            if request_id in self.render_results:
-                render_meta = self.render_results[request_id]
-                
-                # 等待HTML内容块
-                html_content = self._wait_for_distributed_result(request_id, response_event, timeout - (time.time() - start_time))
-                
-                if html_content and html_content.get('success'):
-                    # 合并渲染结果
-                    final_result = {
-                        'success': True,
-                        'url': render_meta.get('url'),
-                        'title': render_meta.get('title'),
-                        'content': html_content.get('content', b''),
-                        'resources': render_meta.get('resources', {}),
-                        'content_type': 'text/html',
-                        'loaded_with_browser': True
-                    }
-                    
-                    del self.render_results[request_id]
-                    return final_result
-            
-            # 检查块是否完成
-            completed_content = self.chunk_manager.get_completed_content(request_id)
-            if completed_content:
-                return {
-                    'success': True,
-                    'content': completed_content,
-                    'content_type': 'application/octet-stream',
-                    'loaded_with_browser': True
-                }
-            
-            time.sleep(0.1)
-        
-        return None
-    
-    def _wait_for_distributed_result(self, request_id, response_event, timeout=60):
-        """等待分布式结果"""
-        start_time = time.time()
-        
-        while time.time() - start_time < timeout:
-            # 检查是否有直接响应
-            if (request_id in self.pending_responses and 
-                self.pending_responses[request_id]['response'] is not None):
-                result = self.pending_responses[request_id]['response']
-                del self.pending_responses[request_id]
-                return result
-            
-            # 检查块是否完成
-            completed_content = self.chunk_manager.get_completed_content(request_id)
-            if completed_content:
-                result = {
-                    'success': True,
-                    'content': completed_content,
-                    'content_type': 'application/octet-stream',
-                    'loaded_with_browser': False
-                }
-                if request_id in self.pending_responses:
-                    del self.pending_responses[request_id]
-                return result
-            
-            # 请求缺失的块
-            self._request_missing_chunks(request_id)
-            
-            time.sleep(0.5)
-        
-        # 超时清理
-        if request_id in self.pending_responses:
-            del self.pending_responses[request_id]
-        return None
-    
-    def _request_missing_chunks(self, request_id):
-        """请求缺失的块"""
-        if request_id not in self.pending_chunks:
-            return
-        
-        # 找出缺失的块
-        stored_chunks = set(self.chunk_manager.chunk_storage.get(request_id, {}).keys())
-        pending_chunks = set(self.pending_chunks[request_id].keys())
-        missing_chunks = pending_chunks - stored_chunks
-        
-        for chunk_index in missing_chunks:
-            # 从不同的节点请求块
-            available_nodes = self.pending_chunks[request_id][chunk_index]
-            if available_nodes:
-                target_node = random.choice(available_nodes)
-                
-                chunk_request = {
-                    'request_id': request_id,
-                    'chunk_index': chunk_index,
-                    'client_node': self.node_id,
-                    'return_address': {
-                        'node_id': self.node_id,
-                        'ip': NetworkHelper.get_local_ip(),
-                        'port': self.tcp_port
-                    }
-                }
-                
-                self._send_to_node(target_node, MessageType.CHUNK_REQUEST, chunk_request)
     
     def get_node_info(self):
         """获取节点信息"""
@@ -1582,12 +1369,371 @@ class AnonymousP2PNode:
         """停止节点"""
         self.running = False
         if self.udp_listener:
-            self.udp_listener.close()
+            try:
+                self.udp_listener.close()
+            except:
+                pass
+            self.udp_listener = None
         if self.tcp_socket:
-            self.tcp_socket.close()
+            try:
+                self.tcp_socket.close()
+            except:
+                pass
+            self.tcp_socket = None
         if self.browser_engine:
-            self.browser_engine.close()
-        self.thread_pool.shutdown()
+            try:
+                self.browser_engine.close()
+            except:
+                pass
+            self.browser_engine = None
+        # 关闭线程池，等待任务完成
+        try:
+            self.thread_pool.shutdown(wait=False)
+        except:
+            pass
+
+    def _split_tasks_for_multi_node(self, url, request_id):
+        """多节点模式：拆分子任务并分配"""
+        tasks = {
+            "html": url,  # HTML主体
+            "css": [],    # 后续提取的CSS资源
+            "js": [],     # 后续提取的JS资源
+            "images": []  # 后续提取的图片资源
+        }
+
+        # 筛选可用节点（排除自身）
+        available_nodes = list(self.known_nodes.keys())
+        if not available_nodes:
+            return {self.node_id: tasks}  # 理论上不会触发，因多节点模式已判断节点数
+
+        # 简单轮询分配任务
+        node_index = 0
+        task_assignments = {}
+        
+        # 分配HTML任务（优先给有浏览器能力的节点）
+        browser_nodes = [nid for nid, (_, _, _, caps) in self.known_nodes.items() if caps.get("browser_engine")]
+        html_node = browser_nodes[0] if browser_nodes else available_nodes[0]
+        task_assignments[html_node] = {"type": "html", "url": url, "request_id": request_id}
+        node_index = (node_index + 1) % len(available_nodes)
+
+        return task_assignments
+
+
+class P2PProxyHandler(http.server.SimpleHTTPRequestHandler):
+    """P2P代理HTTP处理器"""
+    
+    def __init__(self, *args, node=None, **kwargs):
+        self.node = node
+        super().__init__(*args, **kwargs)
+    
+    def do_GET(self):
+        """处理GET请求"""
+        try:
+            # 解析请求的URL
+            if self.path.startswith('/http://') or self.path.startswith('/https://'):
+                target_url = self.path[1:]  # 去掉开头的/
+            elif '?url=' in self.path:
+                # 从查询参数获取URL
+                import urllib.parse
+                parsed = urllib.parse.urlparse(self.path)
+                query_params = urllib.parse.parse_qs(parsed.query)
+                target_url = query_params.get('url', [''])[0]
+            else:
+                # 默认行为，显示使用说明
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                self.wfile.write(b"""
+                <html><body>
+                <h1>P2P Browser Proxy</h1>
+                <p>Usage:</p>
+                <ul>
+                <li>Access any site: http://localhost:8080/http://example.com</li>
+                <li>Or use query parameter: http://localhost:8080/?url=http://example.com</li>
+                </ul>
+                </body></html>
+                """)
+                return
+            
+            if not target_url:
+                self.send_error(400, "Missing URL parameter")
+                return
+            
+            get_logger().log(f"[代理] 请求URL: {target_url}")
+            
+            # 通过P2P网络获取页面（使用浏览器渲染）
+            result = self.node.request_web_page_distributed(target_url, use_browser=True)
+            
+            if result and result.get('success'):
+                content = result.get('content', b'')
+                
+                # 发送响应
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                
+                get_logger().log(f"[代理] 成功返回: {len(content)} 字节")
+            else:
+                error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                self.send_error(502, f"P2P fetch failed: {error_msg}")
+                get_logger().log(f"[代理] 获取失败: {error_msg}")
+                
+        except Exception as e:
+            get_logger().log(f"[代理错误] {e}")
+            msg = html.escape(str(e))
+            self.send_error(502, message=msg)
+
+        # 构造一个 UTF-8 编码的响应体（对异常信息做 HTML 转义）
+        msg = html.escape(str(e))
+        body = (f"<html><body><h1>500 Server Error</h1>"
+                f"<p>Server error occurred.</p>"
+                f"<pre>{msg}</pre>"
+                f"</body></html>").encode('utf-8', 'replace')
+
+        # 发送数字状态码和 UTF-8 响应体，避免将 Unicode 用在状态短语或头中
+        self.send_response(500)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except Exception:
+            # 写失败时尽量安静退出（连接可能已关闭）
+            pass
+
+        except Exception as e:
+            # 确保异常被正确捕获并赋值给e
+            get_logger().log(f"[代理] 处理请求失败: {e}")
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"处理请求失败: {html.escape(str(e))}")
+        except:
+            # 处理未捕获的异常，避免变量e未定义
+            get_logger().log(f"[代理] 发生未知错误")
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "处理请求时发生未知错误")
+    
+    def log_message(self, format, *args):
+        """重写日志方法，使用我们的日志系统"""
+        get_logger().log(f"[HTTP] {format % args}")
+
+class P2PProxyServer:
+    """P2P代理服务器"""
+    
+    def __init__(self, node, host='localhost', port=8080, https_port=8443, ssl_certfile=None, ssl_keyfile=None):
+        self.node = node
+        self.host = host
+        self.port = port
+        self.https_port = https_port
+        self.ssl_certfile = ssl_certfile
+        self.ssl_keyfile = ssl_keyfile
+        self.http_server = None
+        self.https_server = None
+        self.running = False
+    
+    def start(self):
+        """启动代理服务器"""
+        # 启动HTTP服务器
+        handler = lambda *args, **kwargs: P2PProxyHandler(*args, node=self.node, **kwargs)
+        self.http_server = socketserver.TCPServer((self.host, self.port), handler)
+        http_thread = threading.Thread(target=self._serve_http, daemon=True)
+        http_thread.start()
+        get_logger().log(f"[代理] HTTP代理服务器启动在 http://{self.host}:{self.port}")
+        
+        # 如果提供了SSL证书，启动HTTPS服务器
+        if self.ssl_certfile and self.ssl_keyfile and os.path.exists(self.ssl_certfile) and os.path.exists(self.ssl_keyfile):
+            self.https_server = socketserver.TCPServer((self.host, self.https_port), handler)
+            self.https_server.socket = ssl.wrap_socket(
+                self.https_server.socket,
+                keyfile=self.ssl_keyfile,
+                certfile=self.ssl_certfile,
+                server_side=True
+            )
+            https_thread = threading.Thread(target=self._serve_https, daemon=True)
+            https_thread.start()
+            get_logger().log(f"[代理] HTTPS代理服务器启动在 https://{self.host}:{self.https_port}")
+        else:
+            get_logger().log("[代理] 未找到SSL证书，HTTPS服务未启动")
+        
+        self.running = True
+    
+    def _serve_http(self):
+        """运行HTTP服务器"""
+        try:
+            self.http_server.serve_forever()
+        except Exception as e:
+            get_logger().log(f"[代理错误] HTTP服务器错误: {e}")
+    
+    def _serve_https(self):
+        """运行HTTPS服务器"""
+        try:
+            self.https_server.serve_forever()
+        except Exception as e:
+            get_logger().log(f"[代理错误] HTTPS服务器错误: {e}")
+    
+    def stop(self):
+        """停止代理服务器"""
+        self.running = False
+        if self.http_server:
+            try:
+                self.http_server.shutdown()
+                self.http_server.server_close()
+            except:
+                pass
+        if self.https_server:
+            try:
+                self.https_server.shutdown()
+                self.https_server.server_close()
+            except:
+                pass
+
+def print_menu():
+    """打印菜单"""
+    print("\n" + "="*60)
+    print("分布式浏览器渲染P2P系统")
+    print("1. 查看节点信息")
+    print("2. 列出已知节点")
+    print("3. 手动添加节点")
+    print("4. 普通分布式获取网页")
+    print("5. 浏览器渲染获取网页")
+    print("6. 网络测试")
+    print("7. 检查浏览器节点状态")
+    print("8. 退出")
+    print("="*60)
+
+def network_test():
+    """网络测试"""
+    get_logger().log("=== 网络连通性测试 ===")
+    local_ip = NetworkHelper.get_local_ip()
+    broadcast_ip = NetworkHelper.get_broadcast_address()
+    
+    get_logger().log(f"本地IP: {local_ip}")
+    get_logger().log(f"广播地址: {broadcast_ip}")
+    
+    if SELENIUM_AVAILABLE:
+        get_logger().log("Selenium: 已安装")
+    else:
+        get_logger().log("Selenium: 未安装")
+    
+    try:
+        test_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        test_sock.bind(('0.0.0.0', 8888))
+        test_sock.close()
+        get_logger().log("UDP端口绑定: 成功")
+    except Exception as e:
+        get_logger().log(f"UDP端口绑定: 失败 - {e}")
+    
+    get_logger().log("=====================")
+
+def run_command_interface(node):
+    """运行命令界面"""
+    while node.running:
+        try:
+            print_menu()
+            choice = input("请选择操作 (1-8): ").strip()
+            
+            if choice == '1':
+                info = node.get_node_info()
+                print(f"\n节点信息:")
+                print(f"  节点ID: {info['node_id']}")
+                print(f"  地址: {info['ip']}:{info['tcp_port']}")
+                print(f"  已知节点: {info['known_nodes']} 个")
+                print(f"  累计发现: {info['nodes_discovered']} 次")
+                print(f"  浏览器引擎: {info['browser_engine']}")
+                input("\n按回车键继续...")
+                
+            elif choice == '2':
+                nodes = node.list_known_nodes()
+                print(f"\n已知节点 ({len(nodes)} 个):")
+                for i, node_info in enumerate(nodes, 1):
+                    browser_status = "[支持浏览器]" if node_info.get('browser_capable') else "[普通节点]"
+                    print(f"  {i}. {node_info['id']} {browser_status}")
+                    print(f"     地址: {node_info['address']}")
+                    print(f"     最后活跃: {node_info['last_seen']:.1f} 秒前")
+                input("\n按回车键继续...")
+                    
+            elif choice == '3':
+                node_input = input("请输入节点信息 (格式: node_id:ip:port): ").strip()
+                try:
+                    node_id, ip, port_str = node_input.split(':')
+                    node.manual_add_node(node_id, ip, port_str)
+                except ValueError:
+                    print("[错误] 节点格式错误，应为 node_id:ip:port")
+                input("\n按回车键继续...")
+                    
+            elif choice == '4' or choice == '5':
+                url = input("请输入网页URL: ").strip()
+                use_browser = (choice == '5')
+                
+                print(f"[请求] 开始{'浏览器渲染' if use_browser else '分布式'}获取: {url}")
+                result = node.request_web_page_distributed(url, use_browser=use_browser)
+                
+                if result and result.get('success'):
+                    content = result.get('content', b'')
+                    title = result.get('title', '无标题')
+                    result_url = result.get('url', 'None')
+                    loaded_with_browser = result.get('loaded_with_browser', False)
+                    
+                    print(f"\n[成功] 获取到网页内容:")
+                    print(f"  标题: {title}")
+                    print(f"  URL: {result_url}")
+                    print(f"  大小: {len(content)} 字节")
+                    print(f"  方式: {'浏览器渲染' if loaded_with_browser else '分布式获取'}")
+                    
+                    # 保存到文件
+                    filename = f"webpage_{int(time.time())}.html"
+                    with open(filename, 'wb') as f:
+                        f.write(content)
+                    print(f"  内容已保存到: {filename}")
+                    
+                else:
+                    print("\n[失败] 获取网页失败")
+                    if result:
+                        print(f"  错误: {result.get('error', '未知错误')}")
+                
+                input("\n按回车键继续...")
+                    
+            elif choice == '6':
+                network_test()
+                input("\n按回车键继续...")
+                
+            elif choice == '7':
+                browser_nodes = []
+                for node_id, (ip, port, last_seen, capabilities) in node.known_nodes.items():
+                    if capabilities.get('browser_engine', False):
+                        browser_nodes.append({
+                            'id': node_id,
+                            'address': f"{ip}:{port}",
+                            'last_seen': time.time() - last_seen
+                        })
+                
+                print(f"\n浏览器节点状态:")
+                if browser_nodes:
+                    for i, node_info in enumerate(browser_nodes, 1):
+                        print(f"  {i}. {node_info['id']}")
+                        print(f"     地址: {node_info['address']}")
+                        print(f"     最后活跃: {node_info['last_seen']:.1f} 秒前")
+                else:
+                    print("  ❌ 没有发现浏览器节点")
+                    print("\n可能的原因:")
+                    print("  1. 其他节点没有安装浏览器组件")
+                    print("  2. 其他节点的浏览器初始化失败")
+                    print("  3. 网络发现有问题")
+                    print("\n解决方案:")
+                    print("  在其他节点运行: pip install selenium webdriver-manager")
+                    print("  确保其他节点启动时使用 --enable-browser 参数")
+                input("\n按回车键继续...")
+                
+            elif choice == '8':
+                break
+            else:
+                print("[错误] 无效选择")
+                input("\n按回车键继续...")
+                
+        except (EOFError, KeyboardInterrupt):
+            break
+        except Exception as e:
+            print(f"[命令错误] {e}")
+            input("\n按回车键继续...")
 
 def main():
     """主函数"""
@@ -1630,6 +1776,8 @@ def main():
     proxy.start()
     
     try:
+        # 运行命令界面
+        run_command_interface(node)
                 
     except KeyboardInterrupt:
         get_logger().log("\n[系统] 收到中断信号")

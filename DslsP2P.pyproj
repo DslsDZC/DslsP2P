@@ -4,13 +4,17 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>dcf45318-9694-4caf-b2ce-8497485559b4</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>DslsP2P.py</StartupFile>
-    <SearchPath>
-    </SearchPath>
+    <StartupFile>DslsP2PB.py</StartupFile>
+    <SearchPath>..\DslsP2P</SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
     <Name>DslsP2P</Name>
     <RootNamespace>DslsP2P</RootNamespace>
+    <InterpreterId>MSBuild|dsls|$(MSBuildProjectFullPath)</InterpreterId>
+    <IsWindowsApplication>False</IsWindowsApplication>
+    <LaunchProvider>Standard Python launcher</LaunchProvider>
+    <CommandLineArguments>--enable-browser</CommandLineArguments>
+    <EnableNativeCodeDebugging>False</EnableNativeCodeDebugging>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugSymbols>true</DebugSymbols>
@@ -22,6 +26,21 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="DslsP2P.py" />
+    <Compile Include="DslsP2PB.py" />
+  </ItemGroup>
+  <ItemGroup>
+    <Interpreter Include="dsls\">
+      <Id>dsls</Id>
+      <Version>3.14</Version>
+      <Description>dsls (Python 3.14 (64-bit))</Description>
+      <InterpreterPath>Scripts\python.exe</InterpreterPath>
+      <WindowsInterpreterPath>Scripts\pythonw.exe</WindowsInterpreterPath>
+      <PathEnvironmentVariable>PYTHONPATH</PathEnvironmentVariable>
+      <Architecture>X64</Architecture>
+    </Interpreter>
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="README.md" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in
