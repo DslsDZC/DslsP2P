@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-·Ö²¼Ê½ÄäÃûÍøÂçÏµÍ³ - ÍêÕûÊµÏÖ
-×÷Õß: DslsDZC
-ÈÕÆÚ: 2024
+åˆ†å¸ƒå¼åŒ¿åç½‘ç»œç³»ç»Ÿ - å®Œæ•´å®ç°
+ä½œè€…: DslsDZC
+æ—¥æœŸ: 2025
 """
 
 import asyncio
@@ -25,250 +25,178 @@ import aiohttp
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import ChaCha20, PKCS1_OAEP
 from Crypto.Random import get_random_bytes
+from dns_manager import DNSManager, DNSIntegration, SubdomainLeaseManager
 import upnpclient
 import hashlib
 
-# ÅäÖÃÈÕÖ¾
+# é…ç½®æ—¥å¿—
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("DistributedAnonymousNetwork")
 
 class NodeType(Enum):
-    """½ÚµãÀàĞÍÃ¶¾Ù"""
-    D_NODE = "D½Úµã"  # È«¹¦ÄÜ½Úµã
-    U_NODE = "U½Úµã"  # ÊÜÏŞ¹¦ÄÜ½Úµã  
-    R_NODE = "R½Úµã"  # ÖĞ¼ÌÒÀÀµ½Úµã
+    """èŠ‚ç‚¹ç±»å‹æšä¸¾"""
+    D_NODE = "DèŠ‚ç‚¹"  # å…¨åŠŸèƒ½èŠ‚ç‚¹
+    U_NODE = "UèŠ‚ç‚¹"  # å—é™åŠŸèƒ½èŠ‚ç‚¹  
+    R_NODE = "RèŠ‚ç‚¹"  # ä¸­ç»§ä¾èµ–èŠ‚ç‚¹
 
 class FragmentPriority(Enum):
-    """·ÖÆ¬ÓÅÏÈ¼¶Ã¶¾Ù"""
+    """åˆ†ç‰‡ä¼˜å…ˆçº§æšä¸¾"""
     HIGH = 3
     MEDIUM = 2
     LOW = 1
     BACKGROUND = 0
 
-@dataclass
-class NodeConfig:
-    """½ÚµãÅäÖÃÀà"""
-    scan_domain: str = "dsls.top"
-    exclude_subdomains: List[str] = field(default_factory=lambda: ["mail", "www", "ftp", "admin"])
-    initial_nodes: List[str] = field(default_factory=list)
-    upnp_enabled: bool = True
-    performance_params: Dict[str, Any] = field(default_factory=dict)
-    tcp_port_range: Tuple[int, int] = (20000, 60000)
-    dns_ttl: int = 300
-    heartbeat_interval: int = 45
-    discovery_interval: int = 1800  # 30·ÖÖÓ
-    maintenance_interval: int = 600  # 10·ÖÖÓ
-
-@dataclass
-class NodeIdentity:
-    """½ÚµãÉí·İĞÅÏ¢"""
-    node_id: str
-    reputation: int = 1000
-    public_key: bytes = None
-    private_key: bytes = None
-    certificate: bytes = None
-    node_type: NodeType = None
-    capabilities: Dict[str, Any] = field(default_factory=dict)
-
-@dataclass
-class NetworkFragment:
-    """ÍøÂçÊı¾İ·ÖÆ¬"""
-    session_id: str
-    fragment_index: int
-    total_fragments: int
-    data: bytes
-    priority: FragmentPriority
-    offset: int
-    checksum: str
-    timestamp: float
-    flags: int = 0
-
-@dataclass
-class RoutingInfo:
-    """Â·ÓÉĞÅÏ¢"""
-    max_hops: int
-    current_hops: int = 0
-    path_hash: str = ""
-    ttl: int = 300
-    target_info: Dict[str, Any] = field(default_factory=dict)
-
-class DistributedAnonymousNetwork:
-    """·Ö²¼Ê½ÄäÃûÍøÂçÏµÍ³Ö÷Àà"""
+class DPDSLSConfigParser:
+    """.dpdsls é…ç½®æ–‡ä»¶è§£æå™¨ - å®Œæ•´å®ç°"""
     
-    def __init__(self, config_file: str = None):
-        self.config = self._load_config(config_file)
-        self.identity = None
-        self.core_services = {}
-        self.node_list = {}
-        self.routing_table = {}
-        self.session_manager = SessionManager()
-        self.performance_monitor = PerformanceMonitor()
-        self.is_running = False
-        
-    def _load_config(self, config_file: str) -> NodeConfig:
-        """¼ÓÔØÅäÖÃÎÄ¼ş - ÊµÏÖ×ÔÑĞ .dpdsls ¸ñÊ½"""
-        if not config_file:
-            # Èç¹ûÃ»ÓĞÖ¸¶¨ÅäÖÃÎÄ¼ş£¬Ê¹ÓÃÄ¬ÈÏÅäÖÃ
-            return self._get_default_config()
+    def __init__(self):
+        self.config_data = {}
     
-        try:
-            logger.info(f"¼ÓÔØÅäÖÃÎÄ¼ş: {config_file}")
-        
-            # ¼ì²éÎÄ¼şÊÇ·ñ´æÔÚ
-            if not os.path.exists(config_file):
-                logger.warning(f"ÅäÖÃÎÄ¼ş²»´æÔÚ: {config_file}£¬Ê¹ÓÃÄ¬ÈÏÅäÖÃ")
-                return self._get_default_config()
-        
-            # ½âÎö .dpdsls ÎÄ¼ş
-            config_data = self._parse_dpdsls_file(config_file)
-        
-            # ×ª»»Îª NodeConfig ¶ÔÏó
-            return self._build_node_config(config_data)
-        
-        except Exception as e:
-            logger.error(f"¼ÓÔØÅäÖÃÎÄ¼şÊ§°Ü: {e}£¬Ê¹ÓÃÄ¬ÈÏÅäÖÃ")
-            return self._get_default_config()
-
-    def _parse_dpdsls_file(self, config_file: str) -> Dict[str, Any]:
+    def parse_dpdsls_file(self, config_file: str) -> Dict[str, Any]:
         """
-        ½âÎö .dpdsls ÅäÖÃÎÄ¼ş¸ñÊ½£¬Ö§³ÖÌõ¼ş±í´ïÊ½½âÎö
+        è§£æ .dpdsls é…ç½®æ–‡ä»¶æ ¼å¼ï¼Œæ”¯æŒæ¡ä»¶è¡¨è¾¾å¼è§£æ
         """
         config_data = {}
         current_section = None
-        nested_level = 0  # ´¦ÀíÇ¶Ì×Ìõ¼ş¿é
+        nested_level = 0  # å¤„ç†åµŒå¥—æ¡ä»¶å—
 
-        with open(config_file, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
 
-        line_num = 0
-        while line_num < len(lines):
-            try:
-                line = lines[line_num].strip()
-                original_line = line  # ±£´æÔ­Ê¼ĞĞÓÃÓÚ´íÎóÌáÊ¾
-                line_num += 1
+            line_num = 0
+            while line_num < len(lines):
+                try:
+                    line = lines[line_num].strip()
+                    original_line = line  # ä¿å­˜åŸå§‹è¡Œç”¨äºé”™è¯¯æç¤º
+                    line_num += 1
 
-                # ºöÂÔ¿ÕĞĞºÍ×¢ÊÍ
-                if not line or line.startswith('#'):
-                    continue
+                    # å¿½ç•¥ç©ºè¡Œå’Œæ³¨é‡Š
+                    if not line or line.startswith('#'):
+                        continue
 
-                # ´¦ÀíÇø¿é¶¨Òå [section]
-                if line.startswith('[') and line.endswith(']'):
-                    current_section = line[1:-1].strip()
-                    config_data[current_section] = {}
-                    continue
+                    # å¤„ç†åŒºå—å®šä¹‰ [section]
+                    if line.startswith('[') and line.endswith(']'):
+                        current_section = line[1:-1].strip()
+                        config_data[current_section] = {}
+                        continue
 
-                # ´¦ÀíÌõ¼şÅäÖÃ¿é
-                if line.startswith('@if '):
-                    condition_expr = line[4:].strip()
-                    nested_level += 1
-                
-                    # ½âÎö²¢¼ÆËãÌõ¼ş±í´ïÊ½
-                    condition_met = self._evaluate_condition(condition_expr, config_data)
-                
-                    # ÊÕ¼¯Õû¸öÌõ¼ş¿éÄÚÈİ£¨°üÀ¨Ç¶Ì×£©
-                    condition_block = []
-                    while line_num < len(lines) and nested_level > 0:
-                        current_line = lines[line_num].strip()
-                        if current_line.startswith('@if '):
-                            nested_level += 1
-                        elif current_line.startswith('@endif'):
-                            nested_level -= 1
-                            if nested_level == 0:
-                                line_num += 1
-                                break
-                        condition_block.append(lines[line_num])
-                        line_num += 1
+                    # å¤„ç†æ¡ä»¶é…ç½®å—
+                    if line.startswith('@if '):
+                        condition_expr = line[4:].strip()
+                        nested_level += 1
+                    
+                        # è§£æå¹¶è®¡ç®—æ¡ä»¶è¡¨è¾¾å¼
+                        condition_met = self._evaluate_condition(condition_expr, config_data)
+                    
+                        # æ”¶é›†æ•´ä¸ªæ¡ä»¶å—å†…å®¹ï¼ˆåŒ…æ‹¬åµŒå¥—ï¼‰
+                        condition_block = []
+                        while line_num < len(lines) and nested_level > 0:
+                            current_line = lines[line_num].strip()
+                            if current_line.startswith('@if '):
+                                nested_level += 1
+                            elif current_line.startswith('@endif'):
+                                nested_level -= 1
+                                if nested_level == 0:
+                                    line_num += 1
+                                    break
+                            condition_block.append(lines[line_num])
+                            line_num += 1
 
-                    # Èç¹ûÌõ¼şÂú×ã£¬½âÎöÌõ¼ş¿éÄÚÈİ
-                    if condition_met:
-                        # ÁÙÊ±½âÎöÌõ¼ş¿éÄÚÈİ
-                        temp_lines = condition_block
-                        temp_line_num = 0
-                        while temp_line_num < len(temp_lines):
-                            temp_line = temp_lines[temp_line_num].strip()
-                            if not temp_line or temp_line.startswith('#'):
-                                temp_line_num += 1
-                                continue
-                            
-                            # ´¦ÀíÇ¶Ì×Çø¿é
-                            if temp_line.startswith('[') and temp_line.endswith(']'):
-                                current_section = temp_line[1:-1].strip()
-                                if current_section not in config_data:
-                                    config_data[current_section] = {}
-                                temp_line_num += 1
-                                continue
-                            
-                            # ´¦Àí¼üÖµ¶Ô
-                            if '=' in temp_line and current_section is not None:
-                                key, value = temp_line.split('=', 1)
-                                key = key.strip()
-                                value = value.strip()
-                                value = self._resolve_environment_vars(value)
-                                parsed_value = self._parse_config_value(value)
-                            
-                                if '.' in key:
-                                    self._set_nested_value(config_data[current_section], key, parsed_value)
-                                else:
-                                    config_data[current_section][key] = parsed_value
+                        # å¦‚æœæ¡ä»¶æ»¡è¶³ï¼Œè§£ææ¡ä»¶å—å†…å®¹
+                        if condition_met:
+                            # ä¸´æ—¶è§£ææ¡ä»¶å—å†…å®¹
+                            temp_lines = condition_block
+                            temp_line_num = 0
+                            while temp_line_num < len(temp_lines):
+                                temp_line = temp_lines[temp_line_num].strip()
+                                if not temp_line or temp_line.startswith('#'):
+                                    temp_line_num += 1
+                                    continue
                                 
-                            temp_line_num += 1
+                                # å¤„ç†åµŒå¥—åŒºå—
+                                if temp_line.startswith('[') and temp_line.endswith(']'):
+                                    current_section = temp_line[1:-1].strip()
+                                    if current_section not in config_data:
+                                        config_data[current_section] = {}
+                                    temp_line_num += 1
+                                    continue
+                                
+                                # å¤„ç†é”®å€¼å¯¹
+                                if '=' in temp_line and current_section is not None:
+                                    key, value = temp_line.split('=', 1)
+                                    key = key.strip()
+                                    value = value.strip()
+                                    value = self._resolve_environment_vars(value)
+                                    parsed_value = self._parse_config_value(value)
+                                
+                                    if '.' in key:
+                                        self._set_nested_value(config_data[current_section], key, parsed_value)
+                                    else:
+                                        config_data[current_section][key] = parsed_value
+                                    
+                                temp_line_num += 1
+                        continue
+
+                    # å¤„ç†æ™®é€šé”®å€¼å¯¹
+                    if current_section is None:
+                        logger.warning(f"é…ç½®æ–‡ä»¶ç¬¬{line_num}è¡Œï¼šé”®å€¼å¯¹ä¸åœ¨ä»»ä½•åŒºå—å†…")
+                        continue
+
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip()
+                    
+                        # è§£æç¯å¢ƒå˜é‡
+                        value = self._resolve_environment_vars(value)
+                    
+                        # è§£æé…ç½®å€¼ç±»å‹
+                        parsed_value = self._parse_config_value(value)
+                    
+                        # å¤„ç†åµŒå¥—é”®
+                        if '.' in key:
+                            self._set_nested_value(config_data[current_section], key, parsed_value)
+                        else:
+                            config_data[current_section][key] = parsed_value
+
+                except Exception as e:
+                    logger.warning(f"é…ç½®æ–‡ä»¶ç¬¬{line_num}è¡Œè§£æé”™è¯¯ï¼š{e}ï¼ˆå†…å®¹ï¼š{original_line}ï¼‰")
                     continue
 
-                # ´¦ÀíÆÕÍ¨¼üÖµ¶Ô
-                if current_section is None:
-                    logger.warning(f"ÅäÖÃÎÄ¼şµÚ{line_num}ĞĞ£º¼üÖµ¶Ô²»ÔÚÈÎºÎÇø¿éÄÚ")
-                    continue
+            return config_data
 
-                if '=' in line:
-                    key, value = line.split('=', 1)
-                    key = key.strip()
-                    value = value.strip()
-                
-                    # ½âÎö»·¾³±äÁ¿
-                    value = self._resolve_environment_vars(value)
-                
-                    # ½âÎöÅäÖÃÖµÀàĞÍ
-                    parsed_value = self._parse_config_value(value)
-                
-                    # ´¦ÀíÇ¶Ì×¼ü
-                    if '.' in key:
-                        self._set_nested_value(config_data[current_section], key, parsed_value)
-                    else:
-                        config_data[current_section][key] = parsed_value
-
-            except Exception as e:
-                logger.warning(f"ÅäÖÃÎÄ¼şµÚ{line_num}ĞĞ½âÎö´íÎó£º{e}£¨ÄÚÈİ£º{original_line}£©")
-                continue
-
-        return config_data
+        except Exception as e:
+            logger.error(f"è§£æé…ç½®æ–‡ä»¶ {config_file} å¤±è´¥: {e}")
+            return {}
 
     def _evaluate_condition(self, expr: str, config_data: Dict[str, Any]) -> bool:
         """
-        ½âÎö²¢¼ÆËãÌõ¼ş±í´ïÊ½
-        Ö§³ÖµÄ±í´ïÊ½¸ñÊ½£º
-        - »·¾³±äÁ¿ÅĞ¶Ï£º${VAR} == "value"
-        - ÅäÖÃÖµÅĞ¶Ï£ºnetwork.scan_domain == "dsls.top"
-        - Ö§³ÖµÄÔËËã·û£º==, !=, >, <, >=, <=, in, not in
-        - Ö§³ÖµÄÀàĞÍ£º×Ö·û´®¡¢Êı×Ö¡¢²¼¶ûÖµ
+        è§£æå¹¶è®¡ç®—æ¡ä»¶è¡¨è¾¾å¼
+        æ”¯æŒçš„è¡¨è¾¾å¼æ ¼å¼ï¼š
+        - ç¯å¢ƒå˜é‡åˆ¤æ–­ï¼š${VAR} == "value"
+        - é…ç½®å€¼åˆ¤æ–­ï¼šnetwork.scan_domain == "dsls.top"
+        - æ”¯æŒçš„è¿ç®—ç¬¦ï¼š==, !=, >, <, >=, <=, in, not in
+        - æ”¯æŒçš„ç±»å‹ï¼šå­—ç¬¦ä¸²ã€æ•°å­—ã€å¸ƒå°”å€¼
         """
         import re
     
-        # ÌáÈ¡²Ù×÷ÊıºÍÔËËã·û
+        # æå–æ“ä½œæ•°å’Œè¿ç®—ç¬¦
         pattern = r'(\S+)\s*([=!<>]=?|in|not in)\s*(\S+)'
         match = re.match(pattern, expr.strip())
         if not match:
-            logger.warning(f"ÎŞĞ§µÄÌõ¼ş±í´ïÊ½: {expr}")
+            logger.warning(f"æ— æ•ˆçš„æ¡ä»¶è¡¨è¾¾å¼: {expr}")
             return False
 
         left_operand, operator, right_operand = match.groups()
 
-        # ½âÎö×ó²Ù×÷Êı£¨¿ÉÄÜÊÇ»·¾³±äÁ¿»òÅäÖÃÖµ£©
+        # è§£æå·¦æ“ä½œæ•°ï¼ˆå¯èƒ½æ˜¯ç¯å¢ƒå˜é‡æˆ–é…ç½®å€¼ï¼‰
         left_value = self._resolve_operand(left_operand, config_data)
     
-        # ½âÎöÓÒ²Ù×÷Êı£¨¿ÉÄÜÊÇ×Ö·û´®¡¢Êı×Ö»ò²¼¶ûÖµ£©
+        # è§£æå³æ“ä½œæ•°ï¼ˆå¯èƒ½æ˜¯å­—ç¬¦ä¸²ã€æ•°å­—æˆ–å¸ƒå°”å€¼ï¼‰
         right_value = self._parse_config_value(right_operand.strip('"\''))
 
-        # Ö´ĞĞ±È½ÏÔËËã
+        # æ‰§è¡Œæ¯”è¾ƒè¿ç®—
         try:
             if operator == '==':
                 return left_value == right_value
@@ -287,20 +215,20 @@ class DistributedAnonymousNetwork:
             elif operator == 'not in':
                 return left_value not in right_value if isinstance(right_value, list) else True
             else:
-                logger.warning(f"²»Ö§³ÖµÄÔËËã·û: {operator}")
+                logger.warning(f"ä¸æ”¯æŒçš„è¿ç®—ç¬¦: {operator}")
                 return False
         except (TypeError, ValueError) as e:
-            logger.warning(f"Ìõ¼ş±È½ÏÊ§°Ü: {e}£¨±í´ïÊ½: {expr}£©")
+            logger.warning(f"æ¡ä»¶æ¯”è¾ƒå¤±è´¥: {e}ï¼ˆè¡¨è¾¾å¼: {expr}ï¼‰")
             return False
 
     def _resolve_operand(self, operand: str, config_data: Dict[str, Any]) -> Any:
-        """½âÎö²Ù×÷Êı£¬¿ÉÄÜÊÇ»·¾³±äÁ¿»òÅäÖÃÖµ"""
-        # ´¦Àí»·¾³±äÁ¿ ${VAR_NAME}
+        """è§£ææ“ä½œæ•°ï¼Œå¯èƒ½æ˜¯ç¯å¢ƒå˜é‡æˆ–é…ç½®å€¼"""
+        # å¤„ç†ç¯å¢ƒå˜é‡ ${VAR_NAME}
         if operand.startswith('${') and operand.endswith('}'):
             var_name = operand[2:-1]
             return self._resolve_environment_vars(operand)
     
-        # ´¦ÀíÅäÖÃÖµ section.key »ò section.parent.child
+        # å¤„ç†é…ç½®å€¼ section.key æˆ– section.parent.child
         if '.' in operand:
             parts = operand.split('.')
             section = parts[0]
@@ -317,36 +245,38 @@ class DistributedAnonymousNetwork:
                     return None
             return current
     
-        # Ö±½Ó·µ»Ø×Ö·û´®Öµ
+        # ç›´æ¥è¿”å›å­—ç¬¦ä¸²å€¼
         return operand
 
     def _resolve_environment_vars(self, value: str) -> str:
-        """½âÎö»·¾³±äÁ¿ÒıÓÃ ${VAR_NAME}"""
+        """è§£æç¯å¢ƒå˜é‡å¼•ç”¨ ${VAR_NAME}"""
         import re
+        import os
     
         def replace_env_var(match):
             var_name = match.group(1)
-            # Ê×ÏÈ³¢ÊÔ´Ó»·¾³±äÁ¿»ñÈ¡
+            # é¦–å…ˆå°è¯•ä»ç¯å¢ƒå˜é‡è·å–
             env_value = os.getenv(var_name)
             if env_value is not None:
                 return env_value
-            # Èç¹û»·¾³±äÁ¿²»´æÔÚ£¬³¢ÊÔ´ÓÏµÍ³ÅäÖÃ»ñÈ¡
+            # å¦‚æœç¯å¢ƒå˜é‡ä¸å­˜åœ¨ï¼Œå°è¯•ä»ç³»ç»Ÿé…ç½®è·å–
             elif var_name == "HOSTNAME":
+                import socket
                 return socket.gethostname()
             elif var_name == "IP_ADDRESS":
                 return self._get_local_ip()
             else:
-                logger.warning(f"»·¾³±äÁ¿ {var_name} Î´ÉèÖÃ£¬Ê¹ÓÃ¿ÕÖµ")
+                logger.warning(f"ç¯å¢ƒå˜é‡ {var_name} æœªè®¾ç½®ï¼Œä½¿ç”¨ç©ºå€¼")
                 return ""
     
-        # Æ¥Åä ${VAR_NAME} ¸ñÊ½
+        # åŒ¹é… ${VAR_NAME} æ ¼å¼
         pattern = r'\$\{([A-Za-z0-9_]+)\}'
         return re.sub(pattern, replace_env_var, value)
 
     def _get_local_ip(self) -> str:
-        """»ñÈ¡±¾µØIPµØÖ·"""
+        """è·å–æœ¬åœ°IPåœ°å€"""
         try:
-            # ´´½¨Ò»¸öÁÙÊ±socketÀ´»ñÈ¡±¾µØIP
+            # åˆ›å»ºä¸€ä¸ªä¸´æ—¶socketæ¥è·å–æœ¬åœ°IP
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.connect(("8.8.8.8", 80))
                 return s.getsockname()[0]
@@ -354,45 +284,45 @@ class DistributedAnonymousNetwork:
             return "127.0.0.1"
 
     def _parse_config_value(self, value: str) -> Any:
-        """½âÎöÅäÖÃÖµ£¬Ö§³Ö¶àÖÖÊı¾İÀàĞÍ"""
+        """è§£æé…ç½®å€¼ï¼Œæ”¯æŒå¤šç§æ•°æ®ç±»å‹"""
     
-        # ÒÆ³ıÒıºÅ
+        # ç§»é™¤å¼•å·
         if (value.startswith('"') and value.endswith('"')) or \
            (value.startswith("'") and value.endswith("'")):
             return value[1:-1]
     
-        # ²¼¶ûÖµ
+        # å¸ƒå°”å€¼
         if value.lower() in ('true', 'yes', 'on', '1'):
             return True
         if value.lower() in ('false', 'no', 'off', '0'):
             return False
     
-        # Êı×é/ÁĞ±í (¶ººÅ·Ö¸ô)
+        # æ•°ç»„/åˆ—è¡¨ (é€—å·åˆ†éš”)
         if ',' in value:
             items = [self._parse_config_value(item.strip()) for item in value.split(',')]
             return items
     
-        # ¶Ë¿Ú·¶Î§ (20000-60000)
+        # ç«¯å£èŒƒå›´ (20000-60000)
         if '-' in value and value.replace('-', '').isdigit():
             parts = value.split('-')
             if len(parts) == 2:
                 return (int(parts[0]), int(parts[1]))
     
-        # ÕûÊı
+        # æ•´æ•°
         if value.isdigit():
             return int(value)
     
-        # ¸¡µãÊı
+        # æµ®ç‚¹æ•°
         try:
             return float(value)
         except ValueError:
             pass
     
-        # Ä¬ÈÏ·µ»Ø×Ö·û´®
+        # é»˜è®¤è¿”å›å­—ç¬¦ä¸²
         return value
 
     def _set_nested_value(self, config_dict: Dict[str, Any], key: str, value: Any):
-        """ÉèÖÃÇ¶Ì×¼üÖµ (parent.child¸ñÊ½)"""
+        """è®¾ç½®åµŒå¥—é”®å€¼ (parent.childæ ¼å¼)"""
         keys = key.split('.')
         current = config_dict
     
@@ -400,54 +330,192 @@ class DistributedAnonymousNetwork:
             if k not in current:
                 current[k] = {}
             elif not isinstance(current[k], dict):
-                # Èç¹ûÒÑ´æÔÚµ«²»ÊÇ×Öµä£¬×ª»»Îª×Öµä
+                # å¦‚æœå·²å­˜åœ¨ä½†ä¸æ˜¯å­—å…¸ï¼Œè½¬æ¢ä¸ºå­—å…¸
                 current[k] = {"_value": current[k]}
         
             current = current[k]
     
-        # ÉèÖÃ×îÖÕÖµ
+        # è®¾ç½®æœ€ç»ˆå€¼
         current[keys[-1]] = value
 
-    def _build_node_config(self, config_data: Dict[str, Any]) -> NodeConfig:
-        """½«½âÎöµÄÅäÖÃÊı¾İ¹¹½¨Îª NodeConfig ¶ÔÏó"""
+@dataclass
+class NodeConfig:
+    """èŠ‚ç‚¹é…ç½®ç±»"""
+    scan_domain: str = "dsls.top"
+    exclude_subdomains: List[str] = field(default_factory=lambda: ["mail", "www", "ftp", "admin"])
+    initial_nodes: List[str] = field(default_factory=list)
+    upnp_enabled: bool = True
+    performance_params: Dict[str, Any] = field(default_factory=dict)
+    tcp_port_range: Tuple[int, int] = (20000, 60000)
+    dns_ttl: int = 300
+    heartbeat_interval: int = 45
+    discovery_interval: int = 1800  # 30åˆ†é’Ÿ
+    maintenance_interval: int = 600  # 10åˆ†é’Ÿ
+
+@dataclass
+class NodeIdentity:
+    """èŠ‚ç‚¹èº«ä»½ä¿¡æ¯"""
+    node_id: str
+    reputation: int = 1000
+    public_key: bytes = None
+    private_key: bytes = None
+    certificate: bytes = None
+    node_type: NodeType = None
+    capabilities: Dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class NetworkFragment:
+    """ç½‘ç»œæ•°æ®åˆ†ç‰‡"""
+    session_id: str
+    fragment_index: int
+    total_fragments: int
+    data: bytes
+    priority: FragmentPriority
+    offset: int
+    checksum: str
+    timestamp: float
+    flags: int = 0
+
+@dataclass
+class RoutingInfo:
+    """è·¯ç”±ä¿¡æ¯"""
+    max_hops: int
+    current_hops: int = 0
+    path_hash: str = ""
+    ttl: int = 300
+    target_info: Dict[str, Any] = field(default_factory=dict)
+
+class DistributedAnonymousNetwork:
+    """åˆ†å¸ƒå¼åŒ¿åç½‘ç»œç³»ç»Ÿä¸»ç±»"""
     
-        # ÍøÂçÅäÖÃ
+    def __init__(self, config_file: str = None):
+        self.config = self._load_config(config_file)
+        self.identity = None
+        self.core_services = {}
+        self.node_list = {}
+        self.routing_table = {}
+        self.session_manager = SessionManager()
+        self.performance_monitor = PerformanceMonitor()
+        self.is_running = False
+        self.dns_integration = DNSIntegration(self, config_file)
+
+    def _load_config(self, config_file: str) -> NodeConfig:
+        """åŠ è½½é…ç½®æ–‡ä»¶"""
+        if not config_file:
+            # å¦‚æœæ²¡æœ‰æŒ‡å®šé…ç½®æ–‡ä»¶ï¼Œä½¿ç”¨é»˜è®¤é…ç½®
+            return self._get_default_config()
+
+        try:
+            logger.info(f"åŠ è½½é…ç½®æ–‡ä»¶: {config_file}")
+        
+            # æ£€æŸ¥æ–‡ä»¶æ˜¯å¦å­˜åœ¨
+            if not os.path.exists(config_file):
+                logger.warning(f"é…ç½®æ–‡ä»¶ä¸å­˜åœ¨: {config_file}ï¼Œä½¿ç”¨é»˜è®¤é…ç½®")
+                return self._get_default_config()
+        
+            # ä½¿ç”¨ä¸“é—¨çš„é…ç½®è§£æå™¨è§£æ .dpdsls æ–‡ä»¶
+            config_parser = DPDSLSConfigParser()
+            config_data = config_parser.parse_dpdsls_file(config_file)
+        
+            # è½¬æ¢ä¸º NodeConfig å¯¹è±¡
+            return self._build_node_config(config_data)
+        
+        except Exception as e:
+            logger.error(f"åŠ è½½é…ç½®æ–‡ä»¶å¤±è´¥: {e}ï¼Œä½¿ç”¨é»˜è®¤é…ç½®")
+            return self._get_default_config()
+
+    def _build_node_config(self, config_data: Dict[str, Any]) -> NodeConfig:
+        """å°†è§£æçš„é…ç½®æ•°æ®æ„å»ºä¸º NodeConfig å¯¹è±¡"""
+    
+        # ç½‘ç»œé…ç½®
         network_config = config_data.get('network', {})
         scan_domain = network_config.get('scan_domain', 'dsls.top')
         exclude_subdomains = network_config.get('exclude_subdomains', ['mail', 'www', 'ftp', 'admin'])
         initial_nodes = network_config.get('initial_nodes', [])
     
-        # È·±£exclude_subdomainsÊÇÁĞ±í
+        # ç¡®ä¿exclude_subdomainsæ˜¯åˆ—è¡¨
         if isinstance(exclude_subdomains, str):
             exclude_subdomains = [exclude_subdomains]
     
-        # È·±£initial_nodesÊÇÁĞ±í
+        # ç¡®ä¿initial_nodesæ˜¯åˆ—è¡¨
         if isinstance(initial_nodes, str):
             initial_nodes = [initial_nodes]
     
-        # UPnPÅäÖÃ
+        # UPnPé…ç½®
         upnp_config = config_data.get('upnp', {})
         upnp_enabled = upnp_config.get('enabled', True)
         tcp_port_range = upnp_config.get('port_range', (20000, 60000))
     
-        # ĞÔÄÜÅäÖÃ
+        # æ€§èƒ½é…ç½®
         perf_config = config_data.get('performance', {})
         dns_ttl = perf_config.get('dns_ttl', 300)
         heartbeat_interval = perf_config.get('heartbeat_interval', 45)
         discovery_interval = perf_config.get('discovery_interval', 1800)
         maintenance_interval = perf_config.get('maintenance_interval', 600)
     
-        # °²È«ÅäÖÃ
+        # å®‰å…¨é…ç½®
         security_config = config_data.get('security', {})
         encryption_level = security_config.get('encryption_level', 'high')
         max_hops = security_config.get('max_hops', 8)
     
-        # ¸ß¼¶ÅäÖÃ
+        # é«˜çº§é…ç½®
         advanced_config = config_data.get('advanced', {})
         log_level = advanced_config.get('log_level', 'INFO')
         max_connections = advanced_config.get('max_connections', 1000)
     
-        # ¹¹½¨ĞÔÄÜ²ÎÊı×Öµä
+        # DNSé…ç½®
+        dns_config = config_data.get('dns', {})
+        primary_provider = dns_config.get('primary_provider', 'cloudflare')
+        backup_providers = dns_config.get('backup_providers', [])
+        default_zone = dns_config.get('default_zone', 'dsls.top')
+        
+        # DNSæä¾›å•†é…ç½®
+        dns_providers = dns_config.get('providers', {})
+        
+        # åŠ¨æ€DNSé…ç½®
+        dynamic_config = dns_config.get('dynamic', {})
+        dynamic_enabled = dynamic_config.get('enabled', True)
+        lease_time = dynamic_config.get('lease_time', 3600)
+        cleanup_interval = dynamic_config.get('cleanup_interval', 86400)
+        
+        # æ•…éšœè½¬ç§»é…ç½®
+        failover_config = dns_config.get('failover', {})
+        failover_enabled = failover_config.get('enabled', True)
+        health_check_interval = failover_config.get('health_check_interval', 300)
+        max_retries = failover_config.get('max_retries', 3)
+        
+        # é«˜çº§DNSé…ç½®
+        advanced_config = dns_config.get('advanced', {})
+        cache_enabled = advanced_config.get('cache.enabled', True)
+        cache_ttl = advanced_config.get('cache.ttl', 600)
+        request_timeout = advanced_config.get('request_timeout', 30)
+        max_connections = advanced_config.get('max_connections', 100)
+
+        # æ„å»ºDNSé…ç½®å­—å…¸
+        dns_params = {
+            'primary_provider': primary_provider,
+            'backup_providers': backup_providers,
+            'default_zone': default_zone,
+            'providers': dns_providers,
+            'dynamic': {
+                'enabled': dynamic_enabled,
+                'lease_time': lease_time,
+                'cleanup_interval': cleanup_interval
+            },
+            'failover': {
+                'enabled': failover_enabled,
+                'health_check_interval': health_check_interval,
+                'max_retries': max_retries
+            },
+            'advanced': {
+                'cache_enabled': cache_enabled,
+                'cache_ttl': cache_ttl,
+                'request_timeout': request_timeout,
+                'max_connections': max_connections
+            }
+        }
+
+        # æ„å»ºæ€§èƒ½å‚æ•°å­—å…¸ï¼ˆæ·»åŠ DNSé…ç½®ï¼‰
         performance_params = {
             'dns_ttl': dns_ttl,
             'heartbeat_interval': heartbeat_interval,
@@ -456,9 +524,10 @@ class DistributedAnonymousNetwork:
             'encryption_level': encryption_level,
             'max_hops': max_hops,
             'log_level': log_level,
-            'max_connections': max_connections
+            'max_connections': max_connections,
+            'dns': dns_params  # æ·»åŠ DNSé…ç½®
         }
-    
+
         return NodeConfig(
             scan_domain=scan_domain,
             exclude_subdomains=exclude_subdomains,
@@ -473,150 +542,188 @@ class DistributedAnonymousNetwork:
         )
 
     def _get_default_config(self) -> NodeConfig:
-        """»ñÈ¡Ä¬ÈÏÅäÖÃ"""
+        """è·å–é»˜è®¤é…ç½®"""
         return NodeConfig()
-
+    
     def save_config_template(self, file_path: str = "config.dpdsls"):
-        """±£´æÅäÖÃÎÄ¼şÄ£°å"""
-        template = """# ·Ö²¼Ê½ÄäÃûÍøÂçÏµÍ³ÅäÖÃÎÄ¼ş
-    # ÎÄ¼ş¸ñÊ½: .dpdsls (Distributed Privacy Network Configuration)
-    # ±àÂë: UTF-8
+        """ä¿å­˜é…ç½®æ–‡ä»¶æ¨¡æ¿"""
+        template = """# åˆ†å¸ƒå¼åŒ¿åç½‘ç»œç³»ç»Ÿé…ç½®æ–‡ä»¶
+    # æ–‡ä»¶æ ¼å¼: .dpdsls (Distributed Privacy Network Configuration)
+    # ç¼–ç : UTF-8
 
     [network]
-    # É¨ÃèÓòÃû
+    # æ‰«æåŸŸå
     scan_domain = dsls.top
 
-    # ÅÅ³ıµÄ×ÓÓòÃûÁĞ±í (¶ººÅ·Ö¸ô)
+    # æ’é™¤çš„å­åŸŸååˆ—è¡¨ (é€—å·åˆ†éš”)
     exclude_subdomains = mail, www, ftp, admin
 
-    # ³õÊ¼½ÚµãÁĞ±í (¶ººÅ·Ö¸ô)
+    # åˆå§‹èŠ‚ç‚¹åˆ—è¡¨ (é€—å·åˆ†éš”)
     initial_nodes = ${HOSTNAME}.dsls.top:8080, backup-node.dsls.top:9090
 
+    [dns]
+    # DNSæ ¸å¿ƒåŠŸèƒ½é…ç½®
+    # ä¸»DNSæœåŠ¡å•†: cloudflare, aliyun
+    primary_provider = cloudflare
+
+    # å¤‡ç”¨DNSæœåŠ¡å•†åˆ—è¡¨ (é€—å·åˆ†éš”)
+    backup_providers = aliyun
+
+    # é»˜è®¤DNSåŒºåŸŸ
+    default_zone = dsls.top
+
+    # åŠ¨æ€å­åŸŸåé…ç½®
+    dynamic.enabled = true
+    dynamic.lease_time = 3600
+    dynamic.cleanup_interval = 86400
+
+    # æ•…éšœè½¬ç§»é…ç½®
+    failover.enabled = true
+    failover.health_check_interval = 300
+    failover.max_retries = 3
+
+    [dns.providers.cloudflare]
+    # Cloudflare DNSé…ç½®
+    api_key = ${CLOUDFLARE_API_KEY}
+    email = ${CLOUDFLARE_EMAIL}
+
+    [dns.providers.aliyun]
+    # é˜¿é‡Œäº‘DNSé…ç½®
+    access_key_id = ${ALIYUN_ACCESS_KEY_ID}
+    access_key_secret = ${ALIYUN_ACCESS_KEY_SECRET}
+
+    [dns.advanced]
+    # é«˜çº§é…ç½®
+    cache.enabled = true
+    cache.ttl = 600
+    request_timeout = 30
+    max_connections = 100
+
     [upnp]
-    # ÊÇ·ñÆôÓÃUPnP
+    # æ˜¯å¦å¯ç”¨UPnP
     enabled = true
 
-    # TCP¶Ë¿Ú·¶Î§
+    # TCPç«¯å£èŒƒå›´
     port_range = 20000-60000
 
     [performance]
-    # DNS¼ÇÂ¼TTL (Ãë)
+    # DNSè®°å½•TTL (ç§’)
     dns_ttl = 300
 
-    # ĞÄÌø¼ì²â¼ä¸ô (Ãë)
+    # å¿ƒè·³æ£€æµ‹é—´éš” (ç§’)
     heartbeat_interval = 45
 
-    # ½Úµã·¢ÏÖ¼ä¸ô (Ãë)
+    # èŠ‚ç‚¹å‘ç°é—´éš” (ç§’)
     discovery_interval = 1800
 
-    # Î¬»¤ÈÎÎñ¼ä¸ô (Ãë)
+    # ç»´æŠ¤ä»»åŠ¡é—´éš” (ç§’)
     maintenance_interval = 600
 
-    # ×î´óÁ¬½ÓÊı
+    # æœ€å¤§è¿æ¥æ•°
     max_connections = 1000
 
     [security]
-    # ¼ÓÃÜµÈ¼¶: low, medium, high
+    # åŠ å¯†ç­‰çº§: low, medium, high
     encryption_level = high
 
-    # ×î´óÌøÊı
+    # æœ€å¤§è·³æ•°
     max_hops = 8
 
-    # Êı¾İ»ìÏı¼¶±ğ
+    # æ•°æ®æ··æ·†çº§åˆ«
     obfuscation_level = medium
 
     [advanced]
-    # ÈÕÖ¾¼¶±ğ: DEBUG, INFO, WARNING, ERROR
+    # æ—¥å¿—çº§åˆ«: DEBUG, INFO, WARNING, ERROR
     log_level = INFO
 
-    # ĞÔÄÜ¼à¿Ø²ÉÑùÂÊ (0.0-1.0)
+    # æ€§èƒ½ç›‘æ§é‡‡æ ·ç‡ (0.0-1.0)
     monitoring_sample_rate = 0.1
 
-    # »º´æ´óĞ¡ (MB)
+    # ç¼“å­˜å¤§å° (MB)
     cache_size = 100
 
-    # ÆôÓÃµ÷ÊÔÄ£Ê½
+    # å¯ç”¨è°ƒè¯•æ¨¡å¼
     debug_mode = false
 
     [routing]
-    # Â·ÓÉËã·¨: simple, advanced, adaptive
+    # è·¯ç”±ç®—æ³•: simple, advanced, adaptive
     algorithm = adaptive
 
-    # Â·¾¶Ñ¡ÔñÈ¨ÖØ
+    # è·¯å¾„é€‰æ‹©æƒé‡
     weights.reputation = 0.4
     weights.latency = 0.25
     weights.bandwidth = 0.2
     weights.stability = 0.15
 
     [fragmentation]
-    # Ä¬ÈÏ·ÖÆ¬²ßÂÔ
+    # é»˜è®¤åˆ†ç‰‡ç­–ç•¥
     default_strategy = adaptive
 
-    # ×îĞ¡·ÖÆ¬´óĞ¡ (×Ö½Ú)
+    # æœ€å°åˆ†ç‰‡å¤§å° (å­—èŠ‚)
     min_fragment_size = 512
 
-    # ×î´ó·ÖÆ¬´óĞ¡ (×Ö½Ú)
+    # æœ€å¤§åˆ†ç‰‡å¤§å° (å­—èŠ‚)
     max_fragment_size = 16384
 
-    # ÈßÓàÏµÊı
+    # å†—ä½™ç³»æ•°
     redundancy_factor = 1.5
     """
     
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(template)
-            logger.info(f"ÅäÖÃÎÄ¼şÄ£°åÒÑ±£´æ: {file_path}")
+            logger.info(f"é…ç½®æ–‡ä»¶æ¨¡æ¿å·²ä¿å­˜: {file_path}")
             return True
         except Exception as e:
-            logger.error(f"±£´æÅäÖÃÎÄ¼şÄ£°åÊ§°Ü: {e}")
+            logger.error(f"ä¿å­˜é…ç½®æ–‡ä»¶æ¨¡æ¿å¤±è´¥: {e}")
             return False
 
     def validate_config(self, config: NodeConfig) -> Tuple[bool, List[str]]:
-        """ÑéÖ¤ÅäÖÃÓĞĞ§ĞÔ"""
+        """éªŒè¯é…ç½®æœ‰æ•ˆæ€§"""
         errors = []
     
-        # ÑéÖ¤ÓòÃû¸ñÊ½
+        # éªŒè¯åŸŸåæ ¼å¼
         if not self._is_valid_domain(config.scan_domain):
-            errors.append(f"ÎŞĞ§µÄÉ¨ÃèÓòÃû: {config.scan_domain}")
+            errors.append(f"æ— æ•ˆçš„æ‰«æåŸŸå: {config.scan_domain}")
     
-        # ÑéÖ¤¶Ë¿Ú·¶Î§
+        # éªŒè¯ç«¯å£èŒƒå›´
         if config.tcp_port_range[0] >= config.tcp_port_range[1]:
-            errors.append("TCP¶Ë¿Ú·¶Î§ÎŞĞ§")
+            errors.append("TCPç«¯å£èŒƒå›´æ— æ•ˆ")
     
         if config.tcp_port_range[0] < 1024 or config.tcp_port_range[1] > 65535:
-            errors.append("TCP¶Ë¿Ú±ØĞëÔÚ1024-65535·¶Î§ÄÚ")
+            errors.append("TCPç«¯å£å¿…é¡»åœ¨1024-65535èŒƒå›´å†…")
     
-        # ÑéÖ¤Ê±¼ä¼ä¸ô
+        # éªŒè¯æ—¶é—´é—´éš”
         if config.heartbeat_interval < 10:
-            errors.append("ĞÄÌø¼ä¸ô²»ÄÜĞ¡ÓÚ10Ãë")
+            errors.append("å¿ƒè·³é—´éš”ä¸èƒ½å°äº10ç§’")
     
         if config.discovery_interval < 300:
-            errors.append("·¢ÏÖ¼ä¸ô²»ÄÜĞ¡ÓÚ300Ãë")
+            errors.append("å‘ç°é—´éš”ä¸èƒ½å°äº300ç§’")
     
-        # ÑéÖ¤³õÊ¼½Úµã¸ñÊ½
+        # éªŒè¯åˆå§‹èŠ‚ç‚¹æ ¼å¼
         for node in config.initial_nodes:
             if not self._is_valid_node_address(node):
-                errors.append(f"ÎŞĞ§µÄ½ÚµãµØÖ·¸ñÊ½: {node}")
+                errors.append(f"æ— æ•ˆçš„èŠ‚ç‚¹åœ°å€æ ¼å¼: {node}")
     
         return len(errors) == 0, errors
 
     def _is_valid_domain(self, domain: str) -> bool:
-        """ÑéÖ¤ÓòÃû¸ñÊ½"""
+        """éªŒè¯åŸŸåæ ¼å¼"""
         import re
         pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$'
         return bool(re.match(pattern, domain))
 
     def _is_valid_node_address(self, address: str) -> bool:
-        """ÑéÖ¤½ÚµãµØÖ·¸ñÊ½"""
+        """éªŒè¯èŠ‚ç‚¹åœ°å€æ ¼å¼"""
         import re
-        # ¸ñÊ½: hostname:port »ò ip:port
+        # æ ¼å¼: hostname:port æˆ– ip:port
         pattern = r'^[a-zA-Z0-9.-]+:\d+$'
         return bool(re.match(pattern, address))
 
     def get_config_summary(self, config: NodeConfig) -> Dict[str, Any]:
-        """»ñÈ¡ÅäÖÃÕªÒª"""
+        """è·å–é…ç½®æ‘˜è¦"""
         return {
-            "node_type": getattr(config, 'node_type', 'Î´Öª'),
+            "node_type": getattr(config, 'node_type', 'æœªçŸ¥'),
             "scan_domain": config.scan_domain,
             "exclude_subdomains": config.exclude_subdomains,
             "initial_nodes_count": len(config.initial_nodes),
@@ -629,47 +736,49 @@ class DistributedAnonymousNetwork:
         }
     
     async def start(self):
-        """Æô¶¯ÏµÍ³"""
-        logger.info("¿ªÊ¼Æô¶¯·Ö²¼Ê½ÄäÃûÍøÂçÏµÍ³...")
-        
-        # 1. ½Úµã³õÊ¼»¯Á÷³Ì
+        """å¯åŠ¨ç³»ç»Ÿ"""
+        logger.info("å¼€å§‹å¯åŠ¨åˆ†å¸ƒå¼åŒ¿åç½‘ç»œç³»ç»Ÿ...")
+            
+        # 1. èŠ‚ç‚¹åˆå§‹åŒ–æµç¨‹
         await self._initialize_node()
-        
-        # 2. ÍøÂç»·¾³¼ì²â
+            
+        # 2. åˆå§‹åŒ–DNSé›†æˆ
+        await self.dns_integration.initialize()
+            
+        # 3. ç½‘ç»œç¯å¢ƒæ£€æµ‹
         await self._detect_network_environment()
-        
-        # 3. ½Úµã×¢²á
+            
+        # 4. èŠ‚ç‚¹æ³¨å†Œ
         await self._register_node()
-        
-        # 4. Æô¶¯ºËĞÄ·şÎñ
+            
+        # 5. å¯åŠ¨æ ¸å¿ƒæœåŠ¡
         await self._start_core_services()
-        
+            
         self.is_running = True
-        logger.info("ÏµÍ³Æô¶¯Íê³É£¬×¼±¸½ÓÊÕÍøÂçÇëÇó")
-        
-        # Æô¶¯Î¬»¤ÈÎÎñ
+        logger.info("ç³»ç»Ÿå¯åŠ¨å®Œæˆï¼Œå‡†å¤‡æ¥æ”¶ç½‘ç»œè¯·æ±‚")
+        # å¯åŠ¨ç»´æŠ¤ä»»åŠ¡
         asyncio.create_task(self._maintenance_loop())
         
     async def _initialize_node(self):
-        """½Úµã³õÊ¼»¯Á÷³Ì"""
-        logger.info("¿ªÊ¼½Úµã³õÊ¼»¯...")
+        """èŠ‚ç‚¹åˆå§‹åŒ–æµç¨‹"""
+        logger.info("å¼€å§‹èŠ‚ç‚¹åˆå§‹åŒ–...")
         
-        # Éú³É½ÚµãÉí·İ
+        # ç”ŸæˆèŠ‚ç‚¹èº«ä»½
         self.identity = await self._generate_node_identity()
-        logger.info(f"½ÚµãÉí·İÉú³ÉÍê³É: {self.identity.node_id}")
+        logger.info(f"èŠ‚ç‚¹èº«ä»½ç”Ÿæˆå®Œæˆ: {self.identity.node_id}")
         
     async def _generate_node_identity(self) -> NodeIdentity:
-        """Éú³É½ÚµãÉí·İĞÅÏ¢£¬Ö§³Ö´ÓÅäÖÃÎÄ¼şµ¼ÈëÖ¤Êé"""
-        # Éú³ÉÊ±¼ä´ÁºÍËæ»úÊı¾İ´´½¨½ÚµãID
+        """ç”ŸæˆèŠ‚ç‚¹èº«ä»½ä¿¡æ¯ï¼Œæ”¯æŒä»é…ç½®æ–‡ä»¶å¯¼å…¥è¯ä¹¦"""
+        # ç”Ÿæˆæ—¶é—´æˆ³å’Œéšæœºæ•°æ®åˆ›å»ºèŠ‚ç‚¹ID
         timestamp = int(time.time() * 1000)
         random_data = random.getrandbits(128).to_bytes(16, 'big')
         node_id = hashlib.sha256(f"{timestamp}{random_data}".encode()).hexdigest()[:16]
 
-        # Ê¹ÓÃpycryptodomeÉú³ÉRSAÃÜÔ¿¶Ô
+        # ä½¿ç”¨pycryptodomeç”ŸæˆRSAå¯†é’¥å¯¹
         private_key = RSA.generate(2048)
         public_key = private_key.publickey()
     
-        # ĞòÁĞ»¯ÃÜÔ¿
+        # åºåˆ—åŒ–å¯†é’¥
         priv_pem = private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
@@ -680,42 +789,42 @@ class DistributedAnonymousNetwork:
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
     
-        # ´ÓÅäÖÃÎÄ¼ş¼ÓÔØÖ¤Êé
+        # ä»é…ç½®æ–‡ä»¶åŠ è½½è¯ä¹¦
         certificate = None
         try:
-            # ¶ÁÈ¡ÅäÖÃÖĞµÄÖ¤ÊéÂ·¾¶
+            # è¯»å–é…ç½®ä¸­çš„è¯ä¹¦è·¯å¾„
             security_config = self.config.performance_params.get('security', {})
             cert_path = security_config.get('certificate_path')
         
             if cert_path and os.path.exists(cert_path):
                 with open(cert_path, 'rb') as f:
                     certificate = f.read()
-                logger.info(f"³É¹¦´ÓÅäÖÃÎÄ¼ş¼ÓÔØÖ¤Êé: {cert_path}")
+                logger.info(f"æˆåŠŸä»é…ç½®æ–‡ä»¶åŠ è½½è¯ä¹¦: {cert_path}")
             elif cert_path:
-                logger.warning(f"ÅäÖÃÎÄ¼şÖĞÖ¸¶¨µÄÖ¤ÊéÂ·¾¶²»´æÔÚ: {cert_path}")
+                logger.warning(f"é…ç½®æ–‡ä»¶ä¸­æŒ‡å®šçš„è¯ä¹¦è·¯å¾„ä¸å­˜åœ¨: {cert_path}")
             else:
-                logger.info("Î´ÔÚÅäÖÃÎÄ¼şÖĞÖ¸¶¨Ö¤ÊéÂ·¾¶£¬Ê¹ÓÃÎŞÖ¤ÊéÄ£Ê½")
+                logger.info("æœªåœ¨é…ç½®æ–‡ä»¶ä¸­æŒ‡å®šè¯ä¹¦è·¯å¾„ï¼Œä½¿ç”¨æ— è¯ä¹¦æ¨¡å¼")
         except Exception as e:
-            logger.error(f"¼ÓÔØÖ¤ÊéÊ±·¢Éú´íÎó: {e}")
+            logger.error(f"åŠ è½½è¯ä¹¦æ—¶å‘ç”Ÿé”™è¯¯: {e}")
 
         return NodeIdentity(
             node_id=node_id,
             reputation=1000,
             public_key=pub_pem,
             private_key=priv_pem,
-            certificate=certificate  # Ê¹ÓÃ´ÓÅäÖÃÎÄ¼ş¼ÓÔØµÄÖ¤Êé
+            certificate=certificate  # ä½¿ç”¨ä»é…ç½®æ–‡ä»¶åŠ è½½çš„è¯ä¹¦
         )
     
     async def _detect_network_environment(self):
-        """ÍøÂç»·¾³¼ì²âÂß¼­"""
-        logger.info("¿ªÊ¼ÍøÂç»·¾³¼ì²â...")
+        """ç½‘ç»œç¯å¢ƒæ£€æµ‹é€»è¾‘"""
+        logger.info("å¼€å§‹ç½‘ç»œç¯å¢ƒæ£€æµ‹...")
         
-        # ²¢ĞĞÖ´ĞĞ¼ì²âÈÎÎñ
+        # å¹¶è¡Œæ‰§è¡Œæ£€æµ‹ä»»åŠ¡
         dns_result = await self._test_dns_reachability()
         upnp_result = await self._test_upnp_capability()
         perf_result = await self._test_network_performance()
         
-        # ½ÚµãÀàĞÍÅĞ¶¨
+        # èŠ‚ç‚¹ç±»å‹åˆ¤å®š
         if dns_result["success"] and upnp_result["success"]:
             self.identity.node_type = NodeType.D_NODE
         elif not dns_result["success"] and upnp_result["success"]:
@@ -723,9 +832,9 @@ class DistributedAnonymousNetwork:
         else:
             self.identity.node_type = NodeType.R_NODE
             
-        logger.info(f"½ÚµãÀàĞÍÅĞ¶¨: {self.identity.node_type.value}")
+        logger.info(f"èŠ‚ç‚¹ç±»å‹åˆ¤å®š: {self.identity.node_type.value}")
         
-        # ¼ÇÂ¼½ÚµãÄÜÁ¦ĞÅÏ¢
+        # è®°å½•èŠ‚ç‚¹èƒ½åŠ›ä¿¡æ¯
         self.identity.capabilities = {
             "dns": dns_result,
             "upnp": upnp_result,
@@ -733,29 +842,29 @@ class DistributedAnonymousNetwork:
         }
     
     async def _test_dns_reachability(self) -> Dict[str, Any]:
-        """DNS¿É´ïĞÔ²âÊÔ£¬´ÓÅäÖÃÎÄ¼ş»ñÈ¡APIĞÅÏ¢"""
+        """DNSå¯è¾¾æ€§æµ‹è¯•ï¼Œä»é…ç½®æ–‡ä»¶è·å–APIä¿¡æ¯"""
         try:
-            # ´ÓÅäÖÃ»ñÈ¡DNS APIĞÅÏ¢£¬ÓÅÏÈÊ¹ÓÃÓÃ»§ÅäÖÃ£¬ÎŞÅäÖÃÔòÊ¹ÓÃÄ¬ÈÏÖµ
+            # ä»é…ç½®è·å–DNS APIä¿¡æ¯ï¼Œä¼˜å…ˆä½¿ç”¨ç”¨æˆ·é…ç½®ï¼Œæ— é…ç½®åˆ™ä½¿ç”¨é»˜è®¤å€¼
             dns_config = self.config.performance_params.get('dns_api', {})
             api_url = dns_config.get('url', 'http://dns.alidns.com')
             api_key = dns_config.get('api_key', '')
             timeout = dns_config.get('timeout', 10)
         
-            # ¹¹½¨ÇëÇóÍ·£¬°üº¬ÈÏÖ¤ĞÅÏ¢
+            # æ„å»ºè¯·æ±‚å¤´ï¼ŒåŒ…å«è®¤è¯ä¿¡æ¯
             headers = {}
             if api_key:
                 headers['Authorization'] = f"Bearer {api_key}"
         
-            # ·¢ËÍ²âÊÔÇëÇó
+            # å‘é€æµ‹è¯•è¯·æ±‚
             async with aiohttp.ClientSession() as session:
                 resp = await session.get(
                     api_url,
                     headers=headers,
                     timeout=timeout
                 )
-                success = 200 <= resp.status < 300  # 2xx×´Ì¬ÂëÊÓÎª³É¹¦
+                success = 200 <= resp.status < 300  # 2xxçŠ¶æ€ç è§†ä¸ºæˆåŠŸ
             
-                # ¼ÇÂ¼ÏêÏ¸ÏìÓ¦ĞÅÏ¢
+                # è®°å½•è¯¦ç»†å“åº”ä¿¡æ¯
                 details = {
                     "status": resp.status,
                     "api_url": api_url,
@@ -767,7 +876,7 @@ class DistributedAnonymousNetwork:
                 "details": details
             }
         except Exception as e:
-            logger.warning(f"DNS¿É´ïĞÔ²âÊÔÊ§°Ü: {e}")
+            logger.warning(f"DNSå¯è¾¾æ€§æµ‹è¯•å¤±è´¥: {e}")
             return {
                 "success": False,
                 "error": str(e),
@@ -775,23 +884,23 @@ class DistributedAnonymousNetwork:
             }
     
     async def _test_upnp_capability(self) -> Dict[str, Any]:
-        """UPnPÄÜÁ¦¼ì²â"""
+        """UPnPèƒ½åŠ›æ£€æµ‹"""
         if not self.config.upnp_enabled:
-            return {"success": False, "reason": "UPnPÒÑ½ûÓÃ"}
+            return {"success": False, "reason": "UPnPå·²ç¦ç”¨"}
             
         try:
-            # ·¢ÏÖUPnPÍø¹Ø
+            # å‘ç°UPnPç½‘å…³
             devices = upnpclient.discover()
             if not devices:
-                return {"success": False, "reason": "Î´·¢ÏÖUPnPÉè±¸"}
+                return {"success": False, "reason": "æœªå‘ç°UPnPè®¾å¤‡"}
                 
             gateway = devices[0]
             
-            # ²âÊÔ¶Ë¿ÚÓ³Éä
+            # æµ‹è¯•ç«¯å£æ˜ å°„
             external_port = random.randint(20000, 60000)
             internal_port = external_port
             
-            # Ìí¼Ó¶Ë¿ÚÓ³Éä
+            # æ·»åŠ ç«¯å£æ˜ å°„
             gateway.AddPortMapping(
                 NewRemoteHost='',
                 NewExternalPort=external_port,
@@ -803,7 +912,7 @@ class DistributedAnonymousNetwork:
                 NewLeaseDuration=3600
             )
             
-            # ÑéÖ¤Ó³Éä
+            # éªŒè¯æ˜ å°„
             mapping = gateway.GetSpecificPortMappingEntry(
                 NewRemoteHost='',
                 NewExternalPort=external_port,
@@ -812,7 +921,7 @@ class DistributedAnonymousNetwork:
             
             success = mapping is not None
             
-            # ÇåÀí²âÊÔÓ³Éä
+            # æ¸…ç†æµ‹è¯•æ˜ å°„
             if success:
                 gateway.DeletePortMapping(
                     NewRemoteHost='',
@@ -823,40 +932,40 @@ class DistributedAnonymousNetwork:
             return {
                 "success": success,
                 "gateway": gateway.friendly_name,
-                "details": "UPnP¶Ë¿ÚÓ³Éä²âÊÔÍê³É"
+                "details": "UPnPç«¯å£æ˜ å°„æµ‹è¯•å®Œæˆ"
             }
             
         except Exception as e:
-            logger.warning(f"UPnPÄÜÁ¦¼ì²âÊ§°Ü: {e}")
+            logger.warning(f"UPnPèƒ½åŠ›æ£€æµ‹å¤±è´¥: {e}")
             return {"success": False, "error": str(e)}
     
     async def _test_network_performance(self) -> Dict[str, Any]:
-        """ÍøÂçĞÔÄÜ»ù×¼²âÊÔ£¨ÏêÏ¸ÊµÏÖ£©"""
-        logger.info("¿ªÊ¼ÍøÂçĞÔÄÜ»ù×¼²âÊÔ...")
+        """ç½‘ç»œæ€§èƒ½åŸºå‡†æµ‹è¯•ï¼ˆè¯¦ç»†å®ç°ï¼‰"""
+        logger.info("å¼€å§‹ç½‘ç»œæ€§èƒ½åŸºå‡†æµ‹è¯•...")
     
-        # ²âÊÔÄ¿±êÑ¡Ôñ£¨Ê¹ÓÃ³õÊ¼½Úµã»ò¹«¹²²âÊÔ·şÎñÆ÷£©
+        # æµ‹è¯•ç›®æ ‡é€‰æ‹©ï¼ˆä½¿ç”¨åˆå§‹èŠ‚ç‚¹æˆ–å…¬å…±æµ‹è¯•æœåŠ¡å™¨ï¼‰
         test_targets = self.config.initial_nodes.copy()
         if not test_targets:
-            # ÈôÎŞ³õÊ¼½Úµã£¬Ê¹ÓÃ¹«¹²²âÊÔ·şÎñÆ÷
+            # è‹¥æ— åˆå§‹èŠ‚ç‚¹ï¼Œä½¿ç”¨å…¬å…±æµ‹è¯•æœåŠ¡å™¨
             test_targets = [
                 "ping.baidu.com:80",
                 "ping.aliyun.com:80",
-                "203.119.162.10:80"  # ¹«¹²DNS·şÎñÆ÷
+                "203.119.162.10:80"  # å…¬å…±DNSæœåŠ¡å™¨
             ]
     
-        # 1. ÑÓ³Ù²âÊÔ£¨ICMPÄ£Äâ£¬Êµ¼Ê»·¾³¿ÉÄÜĞèÒªÈ¨ÏŞ£©
+        # 1. å»¶è¿Ÿæµ‹è¯•ï¼ˆICMPæ¨¡æ‹Ÿï¼Œå®é™…ç¯å¢ƒå¯èƒ½éœ€è¦æƒé™ï¼‰
         latency_results = await self._test_latency(test_targets)
     
-        # 2. ´ø¿í²âÊÔ£¨ÉÏ´«/ÏÂÔØËÙ¶È£©
+        # 2. å¸¦å®½æµ‹è¯•ï¼ˆä¸Šä¼ /ä¸‹è½½é€Ÿåº¦ï¼‰
         bandwidth_results = await self._test_bandwidth()
     
-        # 3. Á¬½ÓÎÈ¶¨ĞÔ²âÊÔ
+        # 3. è¿æ¥ç¨³å®šæ€§æµ‹è¯•
         stability_results = await self._test_stability(test_targets[:2])
     
-        # 4. °ü¶ªÊ§ÂÊ²âÊÔ
+        # 4. åŒ…ä¸¢å¤±ç‡æµ‹è¯•
         packet_loss = await self._test_packet_loss(test_targets[0])
     
-        # ×ÛºÏ½á¹û¼ÆËã
+        # ç»¼åˆç»“æœè®¡ç®—
         performance_score = (
             (1 - packet_loss) * 0.3 +
             (1 - latency_results["avg_latency"] / 1000) * 0.2 +
@@ -864,7 +973,7 @@ class DistributedAnonymousNetwork:
             stability_results["stability_score"] * 0.2
         )
     
-        logger.info("ÍøÂçĞÔÄÜ»ù×¼²âÊÔÍê³É")
+        logger.info("ç½‘ç»œæ€§èƒ½åŸºå‡†æµ‹è¯•å®Œæˆ")
         return {
             "latency": {
                 "avg_latency": latency_results["avg_latency"],
@@ -887,7 +996,7 @@ class DistributedAnonymousNetwork:
         }
 
     async def _test_latency(self, targets: List[str], samples: int = 10) -> Dict[str, float]:
-        """²âÊÔÑÓ³ÙºÍ¶¶¶¯"""
+        """æµ‹è¯•å»¶è¿Ÿå’ŒæŠ–åŠ¨"""
         latency_samples = defaultdict(list)
     
         for target in targets:
@@ -896,18 +1005,18 @@ class DistributedAnonymousNetwork:
             for _ in range(samples):
                 try:
                     start = time.time()
-                    # Ê¹ÓÃTCPÁ¬½ÓÄ£ÄâICMP ping£¨±ÜÃâÈ¨ÏŞÎÊÌâ£©
+                    # ä½¿ç”¨TCPè¿æ¥æ¨¡æ‹ŸICMP pingï¼ˆé¿å…æƒé™é—®é¢˜ï¼‰
                     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                         s.settimeout(2.0)
                         s.connect((host, 80))
                     end = time.time()
-                    latency = (end - start) * 1000  # ×ª»»ÎªºÁÃë
+                    latency = (end - start) * 1000  # è½¬æ¢ä¸ºæ¯«ç§’
                     latency_samples[host].append(latency)
-                    await asyncio.sleep(0.1)  # ¼ä¸ô²âÊÔ
+                    await asyncio.sleep(0.1)  # é—´éš”æµ‹è¯•
                 except (socket.timeout, ConnectionRefusedError):
                     continue
     
-        # ¼ÆËãÍ³¼ÆÖµ
+        # è®¡ç®—ç»Ÿè®¡å€¼
         all_latencies = [lat for host_lats in latency_samples.values() for lat in host_lats]
         if not all_latencies:
             return {"avg_latency": 1000.0, "min_latency": 1000.0, "max_latency": 1000.0, "jitter": 100.0}
@@ -916,7 +1025,7 @@ class DistributedAnonymousNetwork:
         min_latency = min(all_latencies)
         max_latency = max(all_latencies)
     
-        # ¼ÆËã¶¶¶¯£¨Á¬ĞøÑù±¾²îÖµµÄÆ½¾ùÖµ£©
+        # è®¡ç®—æŠ–åŠ¨ï¼ˆè¿ç»­æ ·æœ¬å·®å€¼çš„å¹³å‡å€¼ï¼‰
         jitter = 0.0
         if len(all_latencies) > 1:
             diffs = [abs(all_latencies[i] - all_latencies[i-1]) for i in range(1, len(all_latencies))]
@@ -930,17 +1039,17 @@ class DistributedAnonymousNetwork:
         }
 
     async def _test_bandwidth(self, test_url: str = "https://speed.hetzner.de/100MB.bin", duration: int = 10) -> Dict[str, float]:
-        """²âÊÔÏÂÔØ/ÉÏ´«´ø¿í"""
+        """æµ‹è¯•ä¸‹è½½/ä¸Šä¼ å¸¦å®½"""
         download_speed = 0.0
         upload_speed = 0.0
     
         try:
-            # ÏÂÔØ²âÊÔ
+            # ä¸‹è½½æµ‹è¯•
             start_time = time.time()
             async with aiohttp.ClientSession() as session:
                 async with session.get(test_url, timeout=duration + 5) as resp:
                     data = b''
-                    chunk_size = 1024 * 1024  # 1MB¿é
+                    chunk_size = 1024 * 1024  # 1MBå—
                     start = time.time()
                 
                     async for chunk in resp.content.iter_chunked(chunk_size):
@@ -953,8 +1062,8 @@ class DistributedAnonymousNetwork:
                     download_time = time.time() - start_time
                     download_speed = (downloaded_size * 8) / download_time  # Mbps
         
-            # ÉÏ´«²âÊÔ£¨Ê¹ÓÃËæ»úÊı¾İ£©
-            upload_data = os.urandom(10 * 1024 * 1024)  # 10MB²âÊÔÊı¾İ
+            # ä¸Šä¼ æµ‹è¯•ï¼ˆä½¿ç”¨éšæœºæ•°æ®ï¼‰
+            upload_data = os.urandom(10 * 1024 * 1024)  # 10MBæµ‹è¯•æ•°æ®
             start_time = time.time()
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -968,7 +1077,7 @@ class DistributedAnonymousNetwork:
             upload_speed = (len(upload_data) * 8 / (1024 * 1024)) / upload_time  # Mbps
         
         except Exception as e:
-            logger.warning(f"´ø¿í²âÊÔÊ§°Ü: {e}")
+            logger.warning(f"å¸¦å®½æµ‹è¯•å¤±è´¥: {e}")
     
         return {
             "download_mbps": round(download_speed, 2),
@@ -977,7 +1086,7 @@ class DistributedAnonymousNetwork:
         }
 
     async def _test_stability(self, targets: List[str], test_duration: int = 30) -> Dict[str, Any]:
-        """²âÊÔÁ¬½ÓÎÈ¶¨ĞÔ"""
+        """æµ‹è¯•è¿æ¥ç¨³å®šæ€§"""
         drops = 0
         retries = 0
         total_attempts = 0
@@ -990,14 +1099,14 @@ class DistributedAnonymousNetwork:
                 total_attempts += 1
             
                 try:
-                    # ½¨Á¢Á¬½Ó²¢±£³Ö1Ãë
+                    # å»ºç«‹è¿æ¥å¹¶ä¿æŒ1ç§’
                     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                         s.settimeout(2.0)
                         s.connect((host, port))
                         await asyncio.sleep(1)
                 except (socket.timeout, ConnectionResetError):
                     drops += 1
-                    # ÖØÊÔÒ»´Î
+                    # é‡è¯•ä¸€æ¬¡
                     try:
                         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                             s.settimeout(2.0)
@@ -1006,9 +1115,9 @@ class DistributedAnonymousNetwork:
                     except:
                         pass
         
-            await asyncio.sleep(1)  # ²âÊÔ¼ä¸ô
+            await asyncio.sleep(1)  # æµ‹è¯•é—´éš”
     
-        # ÎÈ¶¨ĞÔµÃ·Ö£¨0-1.0£©
+        # ç¨³å®šæ€§å¾—åˆ†ï¼ˆ0-1.0ï¼‰
         stability_score = 1.0 - (drops / total_attempts) if total_attempts > 0 else 0.5
     
         return {
@@ -1019,7 +1128,7 @@ class DistributedAnonymousNetwork:
         }
 
     async def _test_packet_loss(self, target: str, packet_count: int = 50) -> float:
-        """²âÊÔ¶ª°üÂÊ"""
+        """æµ‹è¯•ä¸¢åŒ…ç‡"""
         host, _ = target.split(':') if ':' in target else (target, 80)
         lost = 0
         sent = 0
@@ -1032,16 +1141,16 @@ class DistributedAnonymousNetwork:
                     sent += 1
             except:
                 lost += 1
-            await asyncio.sleep(0.05)  # ¿ØÖÆ·¢°üËÙÂÊ
+            await asyncio.sleep(0.05)  # æ§åˆ¶å‘åŒ…é€Ÿç‡
     
         if sent == 0:
-            return 1.0  # È«²¿¶ªÊ§
+            return 1.0  # å…¨éƒ¨ä¸¢å¤±
     
         return round(lost / (sent + lost), 4)
     
     async def _register_node(self):
-        """½Úµã×¢²áÖ´ĞĞÂß¼­"""
-        logger.info(f"¿ªÊ¼½Úµã×¢²á£¬ÀàĞÍ: {self.identity.node_type.value}")
+        """èŠ‚ç‚¹æ³¨å†Œæ‰§è¡Œé€»è¾‘"""
+        logger.info(f"å¼€å§‹èŠ‚ç‚¹æ³¨å†Œï¼Œç±»å‹: {self.identity.node_type.value}")
         
         if self.identity.node_type == NodeType.D_NODE:
             await self._register_d_node()
@@ -1050,71 +1159,77 @@ class DistributedAnonymousNetwork:
         else:  # R_NODE
             await self._register_r_node()
             
-        logger.info("½Úµã×¢²áÍê³É")
+        logger.info("èŠ‚ç‚¹æ³¨å†Œå®Œæˆ")
     
     async def _register_d_node(self):
-        """D½Úµã×¢²áÁ÷³Ì"""
+        """DèŠ‚ç‚¹æ³¨å†Œæµç¨‹ - ä¿®æ”¹ä¸ºä½¿ç”¨DNSé›†æˆ"""
         try:
-            # Éú³ÉËæ»ú×ÓÓòÃû
-            subdomain = self._generate_random_subdomain()
+            # è·å–å…¬ç½‘IP
+            public_ip = self._get_public_ip()
             
-            # µ÷ÓÃDNS API×¢²áA¼ÇÂ¼
-            success = await self._register_dns_record(subdomain)
-            if success:
-                logger.info(f"D½ÚµãDNS×¢²á³É¹¦: {subdomain}.{self.config.scan_domain}")
+            # ä½¿ç”¨DNSé›†æˆæ³¨å†ŒåŠ¨æ€å­åŸŸå
+            subdomain = await self.dns_integration.acquire_dynamic_subdomain(
+                self.identity.node_id, public_ip
+            )
+            
+            if subdomain:
+                logger.info(f"DèŠ‚ç‚¹DNSæ³¨å†ŒæˆåŠŸ: {subdomain}.{self.config.scan_domain}")
                 
-                # ÔÚDHTÖĞ·¢²¼½ÚµãÄÜÁ¦
+                # åœ¨èŠ‚ç‚¹ä¿¡æ¯ä¸­è®°å½•å­åŸŸå
+                self.identity.capabilities["dns_subdomain"] = subdomain
+                
+                # åœ¨DHTä¸­å‘å¸ƒèŠ‚ç‚¹èƒ½åŠ›
                 await self._publish_to_dht()
                 
-                # ¼ÓÈë¸ºÔØ¾ùºâ³Ø
+                # åŠ å…¥è´Ÿè½½å‡è¡¡æ± 
                 await self._join_load_balancer()
                 
         except Exception as e:
-            logger.error(f"D½Úµã×¢²áÊ§°Ü: {e}")
+            logger.error(f"DèŠ‚ç‚¹æ³¨å†Œå¤±è´¥: {e}")
     
     async def _register_u_node(self):
-        """U½Úµã×¢²áÁ÷³Ì"""
+        """UèŠ‚ç‚¹æ³¨å†Œæµç¨‹"""
         try:
-            # Ö´ĞĞUPnP¶Ë¿ÚÓ³Éä
+            # æ‰§è¡ŒUPnPç«¯å£æ˜ å°„
             external_port = await self._setup_upnp_mapping()
             
-            # Ñ°ÕÒ¿ÉÓÃD½Úµã
+            # å¯»æ‰¾å¯ç”¨DèŠ‚ç‚¹
             d_nodes = [node for node in self.node_list.values() 
                       if node.get("type") == NodeType.D_NODE and node.get("active")]
             
             if d_nodes:
                 proxy_node = random.choice(d_nodes)
                 
-                # ·¢ËÍ´úÀí×¢²áÇëÇó
+                # å‘é€ä»£ç†æ³¨å†Œè¯·æ±‚
                 success = await self._send_proxy_registration(proxy_node, external_port)
                 if success:
-                    logger.info(f"U½ÚµãÍ¨¹ı´úÀí×¢²á³É¹¦")
+                    logger.info(f"UèŠ‚ç‚¹é€šè¿‡ä»£ç†æ³¨å†ŒæˆåŠŸ")
                     
         except Exception as e:
-            logger.error(f"U½Úµã×¢²áÊ§°Ü: {e}")
+            logger.error(f"UèŠ‚ç‚¹æ³¨å†Œå¤±è´¥: {e}")
     
     async def _register_r_node(self):
-        """R½Úµã×¢²áÁ÷³Ì"""
+        """RèŠ‚ç‚¹æ³¨å†Œæµç¨‹"""
         try:
-            # Á¬½ÓÊÖ¶¯ÅäÖÃµÄ³õÊ¼½Úµã
+            # è¿æ¥æ‰‹åŠ¨é…ç½®çš„åˆå§‹èŠ‚ç‚¹
             for node_addr in self.config.initial_nodes:
                 if await self._connect_to_initial_node(node_addr):
-                    logger.info(f"R½ÚµãÍ¨¹ı³õÊ¼½ÚµãÁ¬½Ó³É¹¦: {node_addr}")
+                    logger.info(f"RèŠ‚ç‚¹é€šè¿‡åˆå§‹èŠ‚ç‚¹è¿æ¥æˆåŠŸ: {node_addr}")
                     break
             else:
-                logger.warning("ËùÓĞ³õÊ¼½ÚµãÁ¬½ÓÊ§°Ü")
+                logger.warning("æ‰€æœ‰åˆå§‹èŠ‚ç‚¹è¿æ¥å¤±è´¥")
                 
         except Exception as e:
-            logger.error(f"R½Úµã×¢²áÊ§°Ü: {e}")
+            logger.error(f"RèŠ‚ç‚¹æ³¨å†Œå¤±è´¥: {e}")
     
     def _generate_random_subdomain(self) -> str:
-        """Éú³ÉËæ»ú×ÓÓòÃû (Base58¸ñÊ½)"""
+        """ç”Ÿæˆéšæœºå­åŸŸå (Base58æ ¼å¼)"""
         base58_chars = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
         return ''.join(random.choices(base58_chars, k=8))
     
     async def _start_core_services(self):
-        """Æô¶¯ºËĞÄ·şÎñ"""
-        logger.info("Æô¶¯ºËĞÄ·şÎñ...")
+        """å¯åŠ¨æ ¸å¿ƒæœåŠ¡"""
+        logger.info("å¯åŠ¨æ ¸å¿ƒæœåŠ¡...")
         
         self.core_services = {
             "tcp_stack": TCPExtensionStack(self),
@@ -1124,46 +1239,49 @@ class DistributedAnonymousNetwork:
             "performance_monitor": PerformanceMonitor()
         }
         
-        # Æô¶¯ËùÓĞ·şÎñ
+        # å¯åŠ¨æ‰€æœ‰æœåŠ¡
         for service_name, service in self.core_services.items():
             if hasattr(service, 'start'):
                 await service.start()
-            logger.info(f"·şÎñ {service_name} ÒÑÆô¶¯")
+            logger.info(f"æœåŠ¡ {service_name} å·²å¯åŠ¨")
     
     async def _maintenance_loop(self):
-        """Î¬»¤Ñ­»·"""
+        """ç»´æŠ¤å¾ªç¯ - æ·»åŠ DNSç»´æŠ¤"""
         while self.is_running:
             try:
-                # ¸ù¾İ½ÚµãÀàĞÍµ÷ÕûÎ¬»¤ÖÜÆÚ
+                # æ ¹æ®èŠ‚ç‚¹ç±»å‹è°ƒæ•´ç»´æŠ¤å‘¨æœŸ
                 interval = self._get_maintenance_interval()
-                logger.debug(f"¿ªÊ¼Î¬»¤ÖÜÆÚ£¬¼ä¸ô {interval} Ãë")
+                logger.debug(f"å¼€å§‹ç»´æŠ¤å‘¨æœŸï¼Œé—´éš” {interval} ç§’")
             
-                # ½¡¿µ¼à¿Ø
+                # å¥åº·ç›‘æ§
                 await self._health_monitoring()
             
-                # DNS¼ÇÂ¼Î¬»¤£¨½öD½Úµã£©
+                # DNSè®°å½•ç»´æŠ¤ï¼ˆä»…DèŠ‚ç‚¹ï¼‰
                 if self.identity.node_type == NodeType.D_NODE:
                     await self._dns_maintenance()
             
-                # Â·ÓÉ±íÓÅ»¯
+                # DNSé›†æˆç»´æŠ¤
+                await self.dns_integration.perform_dns_maintenance()
+            
+                # è·¯ç”±è¡¨ä¼˜åŒ–
                 await self._routing_table_optimization()
             
-                # ½ÚµãÇåÀí£¨ÒÆ³ı³¤ÆÚÀëÏß½Úµã£©
+                # èŠ‚ç‚¹æ¸…ç†ï¼ˆç§»é™¤é•¿æœŸç¦»çº¿èŠ‚ç‚¹ï¼‰
                 await self._cleanup_inactive_nodes()
             
-                # µÈ´ıÏÂÒ»¸öÎ¬»¤ÖÜÆÚ
+                # ç­‰å¾…ä¸‹ä¸€ä¸ªç»´æŠ¤å‘¨æœŸ
                 await asyncio.sleep(interval)
             
             except Exception as e:
-                logger.error(f"Î¬»¤Ñ­»·Òì³£: {e}", exc_info=True)
-                await asyncio.sleep(10)  # Òì³£ºóËõ¶ÌµÈ´ıÊ±¼ä
+                logger.error(f"ç»´æŠ¤å¾ªç¯å¼‚å¸¸: {e}", exc_info=True)
+                await asyncio.sleep(10)
 
     def _get_maintenance_interval(self) -> int:
-        """¸ù¾İ½Úµã¸ºÔØ¶¯Ì¬µ÷ÕûÎ¬»¤¼ä¸ô"""
+        """æ ¹æ®èŠ‚ç‚¹è´Ÿè½½åŠ¨æ€è°ƒæ•´ç»´æŠ¤é—´éš”"""
         load_factor = self.performance_monitor.get_system_load()
         base_interval = self.config.maintenance_interval
     
-        # ¸ß¸ºÔØÊ±ÑÓ³¤¼ä¸ô£¬µÍ¸ºÔØÊ±Ëõ¶Ì¼ä¸ô
+        # é«˜è´Ÿè½½æ—¶å»¶é•¿é—´éš”ï¼Œä½è´Ÿè½½æ—¶ç¼©çŸ­é—´éš”
         if load_factor > 0.8:
             return int(base_interval * 1.5)
         elif load_factor < 0.3:
@@ -1171,26 +1289,26 @@ class DistributedAnonymousNetwork:
         return base_interval
 
     async def _health_monitoring(self):
-        """½¡¿µ¼à¿Ø£¨¶àÎ¬¶È¼ì²é£©"""
-        logger.info(f"¿ªÊ¼½¡¿µ¼à¿Ø£¬¹² {len(self.node_list)} ¸ö½ÚµãĞèÒª¼ì²é")
+        """å¥åº·ç›‘æ§ï¼ˆå¤šç»´åº¦æ£€æŸ¥ï¼‰"""
+        logger.info(f"å¼€å§‹å¥åº·ç›‘æ§ï¼Œå…± {len(self.node_list)} ä¸ªèŠ‚ç‚¹éœ€è¦æ£€æŸ¥")
     
-        # ²¢·¢¼ì²é½Úµã½¡¿µ×´Ì¬£¨ÏŞÖÆ²¢·¢Êı±ÜÃâÍøÂçÓµÈû£©
-        semaphore = asyncio.Semaphore(10)  # ×î¶àÍ¬Ê±¼ì²é10¸ö½Úµã
+        # å¹¶å‘æ£€æŸ¥èŠ‚ç‚¹å¥åº·çŠ¶æ€ï¼ˆé™åˆ¶å¹¶å‘æ•°é¿å…ç½‘ç»œæ‹¥å¡ï¼‰
+        semaphore = asyncio.Semaphore(10)  # æœ€å¤šåŒæ—¶æ£€æŸ¥10ä¸ªèŠ‚ç‚¹
     
         async def check_node(node_id, node_info):
             async with semaphore:
                 return await self._check_node_health(node_id, node_info)
     
-        # ´´½¨ËùÓĞ¼ì²éÈÎÎñ
+        # åˆ›å»ºæ‰€æœ‰æ£€æŸ¥ä»»åŠ¡
         check_tasks = [
             check_node(node_id, node_info) 
             for node_id, node_info in self.node_list.items()
         ]
     
-        # Ö´ĞĞËùÓĞ¼ì²é²¢ÊÕ¼¯½á¹û
+        # æ‰§è¡Œæ‰€æœ‰æ£€æŸ¥å¹¶æ”¶é›†ç»“æœ
         results = await asyncio.gather(*check_tasks)
     
-        # ¸üĞÂ½Úµã×´Ì¬
+        # æ›´æ–°èŠ‚ç‚¹çŠ¶æ€
         for (node_id, is_healthy, details), node_info in zip(results, self.node_list.values()):
             prev_state = node_info.get("active", False)
             node_info["last_check"] = time.time()
@@ -1199,21 +1317,21 @@ class DistributedAnonymousNetwork:
             if is_healthy:
                 node_info["active"] = True
                 node_info["last_seen"] = time.time()
-                # ½¡¿µ×´Ì¬½±ÀøĞÅÓş·Ö
+                # å¥åº·çŠ¶æ€å¥–åŠ±ä¿¡èª‰åˆ†
                 self._adjust_reputation(node_id, 1)
                 if not prev_state:
-                    logger.info(f"½Úµã {node_id} »Ö¸´½¡¿µ×´Ì¬")
+                    logger.info(f"èŠ‚ç‚¹ {node_id} æ¢å¤å¥åº·çŠ¶æ€")
             else:
                 node_info["active"] = False
-                # ²»½¡¿µ×´Ì¬³Í·£ĞÅÓş·Ö
+                # ä¸å¥åº·çŠ¶æ€æƒ©ç½šä¿¡èª‰åˆ†
                 self._adjust_reputation(node_id, -5)
                 consecutive_fails = node_info.get("consecutive_fails", 0) + 1
                 node_info["consecutive_fails"] = consecutive_fails
                 if consecutive_fails >= 3:
-                    logger.warning(f"½Úµã {node_id} Á¬Ğø {consecutive_fails} ´Î½¡¿µ¼ì²éÊ§°Ü")
+                    logger.warning(f"èŠ‚ç‚¹ {node_id} è¿ç»­ {consecutive_fails} æ¬¡å¥åº·æ£€æŸ¥å¤±è´¥")
 
     async def _check_node_health(self, node_id: str, node_info: Dict[str, Any]) -> Tuple[str, bool, Dict[str, Any]]:
-        """¼ì²éµ¥¸ö½Úµã½¡¿µ×´Ì¬£¨¶àÎ¬¶ÈÑéÖ¤£©"""
+        """æ£€æŸ¥å•ä¸ªèŠ‚ç‚¹å¥åº·çŠ¶æ€ï¼ˆå¤šç»´åº¦éªŒè¯ï¼‰"""
         start_time = time.time()
         details = {
             "checks": {},
@@ -1222,25 +1340,25 @@ class DistributedAnonymousNetwork:
         }
     
         try:
-            # 1. »ù´¡Á¬½Ó¼ì²é£¨TCPÎÕÊÖ£©
+            # 1. åŸºç¡€è¿æ¥æ£€æŸ¥ï¼ˆTCPæ¡æ‰‹ï¼‰
             conn_result = await self._check_connection(node_info["address"])
             details["checks"]["connection"] = conn_result
             if not conn_result["success"]:
                 return (node_id, False, details)
         
-            # 2. Ğ­ÒéÏìÓ¦¼ì²é£¨×Ô¶¨Òå½¡¿µ¼ì²éĞ­Òé£©
+            # 2. åè®®å“åº”æ£€æŸ¥ï¼ˆè‡ªå®šä¹‰å¥åº·æ£€æŸ¥åè®®ï¼‰
             proto_result = await self._check_protocol_response(node_id, node_info["address"])
             details["checks"]["protocol"] = proto_result
             if not proto_result["success"]:
                 return (node_id, False, details)
         
-            # 3. ĞÔÄÜÖ¸±ê¼ì²é£¨ÑÓ³Ù/´ø¿íÊÇ·ñÔÚ¿É½ÓÊÜ·¶Î§£©
+            # 3. æ€§èƒ½æŒ‡æ ‡æ£€æŸ¥ï¼ˆå»¶è¿Ÿ/å¸¦å®½æ˜¯å¦åœ¨å¯æ¥å—èŒƒå›´ï¼‰
             perf_result = await self._check_performance_metrics(node_id, node_info)
             details["checks"]["performance"] = perf_result
             if not perf_result["success"]:
                 return (node_id, False, details)
         
-            # ¼ÆËã×ÜÏìÓ¦Ê±¼ä
+            # è®¡ç®—æ€»å“åº”æ—¶é—´
             details["response_time"] = time.time() - start_time
             return (node_id, True, details)
         
@@ -1250,23 +1368,23 @@ class DistributedAnonymousNetwork:
             return (node_id, False, details)
 
     async def _check_connection(self, address: str) -> Dict[str, Any]:
-        """¼ì²é½Úµã»ù´¡ÍøÂçÁ¬½Ó"""
+        """æ£€æŸ¥èŠ‚ç‚¹åŸºç¡€ç½‘ç»œè¿æ¥"""
         try:
             host, port = address.split(':')
             port = int(port)
         
             start = time.time()
-            # Ê¹ÓÃ·Ç×èÈûÁ¬½Ó¼ì²é
+            # ä½¿ç”¨éé˜»å¡è¿æ¥æ£€æŸ¥
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(host, port),
-                timeout=5.0  # 5Ãë³¬Ê±
+                timeout=5.0  # 5ç§’è¶…æ—¶
             )
             writer.close()
             await writer.wait_closed()
         
             return {
                 "success": True,
-                "latency": (time.time() - start) * 1000,  # ºÁÃë
+                "latency": (time.time() - start) * 1000,  # æ¯«ç§’
                 "timestamp": time.time()
             }
         except (asyncio.TimeoutError, ConnectionRefusedError) as e:
@@ -1277,15 +1395,15 @@ class DistributedAnonymousNetwork:
             }
 
     async def _check_protocol_response(self, node_id: str, address: str) -> Dict[str, Any]:
-        """¼ì²é½ÚµãĞ­ÒéÏìÓ¦£¨×Ô¶¨Òå½¡¿µ¼ì²éÃüÁî£©"""
+        """æ£€æŸ¥èŠ‚ç‚¹åè®®å“åº”ï¼ˆè‡ªå®šä¹‰å¥åº·æ£€æŸ¥å‘½ä»¤ï¼‰"""
         try:
             host, port = address.split(':')
             port = int(port)
         
-            # ·¢ËÍ½¡¿µ¼ì²éĞ­Òé°ü
+            # å‘é€å¥åº·æ£€æŸ¥åè®®åŒ…
             reader, writer = await asyncio.open_connection(host, port)
         
-            # ¹¹½¨½¡¿µ¼ì²éÇëÇó
+            # æ„å»ºå¥åº·æ£€æŸ¥è¯·æ±‚
             request = {
                 "type": "health_check",
                 "sender_id": self.identity.node_id,
@@ -1293,18 +1411,18 @@ class DistributedAnonymousNetwork:
                 "nonce": random.getrandbits(64)
             }
         
-            # ·¢ËÍÇëÇó£¨¼òµ¥Ğ­Òé£ºJSON×Ö·û´®+»»ĞĞ·û£©
+            # å‘é€è¯·æ±‚ï¼ˆç®€å•åè®®ï¼šJSONå­—ç¬¦ä¸²+æ¢è¡Œç¬¦ï¼‰
             writer.write(json.dumps(request).encode() + b'\n')
             await writer.drain()
         
-            # µÈ´ıÏìÓ¦
+            # ç­‰å¾…å“åº”
             data = await asyncio.wait_for(reader.readuntil(b'\n'), timeout=3.0)
             response = json.loads(data.decode().strip())
         
             writer.close()
             await writer.wait_closed()
         
-            # ÑéÖ¤ÏìÓ¦ºÏ·¨ĞÔ
+            # éªŒè¯å“åº”åˆæ³•æ€§
             if (response.get("type") == "health_response" and 
                 response.get("node_id") == node_id and 
                 response.get("status") == "ok"):
@@ -1316,31 +1434,31 @@ class DistributedAnonymousNetwork:
                     "timestamp": time.time()
                 }
         
-            return {"success": False, "error": "ÎŞĞ§ÏìÓ¦¸ñÊ½", "timestamp": time.time()}
+            return {"success": False, "error": "æ— æ•ˆå“åº”æ ¼å¼", "timestamp": time.time()}
         
         except Exception as e:
             return {"success": False, "error": str(e), "timestamp": time.time()}
 
     async def _check_performance_metrics(self, node_id: str, node_info: Dict[str, Any]) -> Dict[str, Any]:
-        """¼ì²é½ÚµãĞÔÄÜÖ¸±êÊÇ·ñ´ï±ê"""
-        # »ñÈ¡ÀúÊ·ĞÔÄÜÊı¾İ
+        """æ£€æŸ¥èŠ‚ç‚¹æ€§èƒ½æŒ‡æ ‡æ˜¯å¦è¾¾æ ‡"""
+        # è·å–å†å²æ€§èƒ½æ•°æ®
         perf_data = self.performance_monitor.get_node_performance(node_id)
         if not perf_data:
-            return {"success": True, "warning": "ÎŞÀúÊ·ĞÔÄÜÊı¾İ", "timestamp": time.time()}
+            return {"success": True, "warning": "æ— å†å²æ€§èƒ½æ•°æ®", "timestamp": time.time()}
     
-        # ¼ì²éÑÓ³ÙÊÇ·ñÔÚ¿É½ÓÊÜ·¶Î§£¨»ùÓÚÀúÊ·Æ½¾ùÖµ£©
+        # æ£€æŸ¥å»¶è¿Ÿæ˜¯å¦åœ¨å¯æ¥å—èŒƒå›´ï¼ˆåŸºäºå†å²å¹³å‡å€¼ï¼‰
         avg_latency = perf_data.get("avg_latency", 100)
         current_latency = node_info["health_details"]["checks"]["connection"]["latency"]
-        latency_ok = current_latency < avg_latency * 2  # ²»³¬¹ıÀúÊ·Æ½¾ùµÄ2±¶
+        latency_ok = current_latency < avg_latency * 2  # ä¸è¶…è¿‡å†å²å¹³å‡çš„2å€
     
-        # ¼ì²é½Úµã¸ºÔØ
+        # æ£€æŸ¥èŠ‚ç‚¹è´Ÿè½½
         system_load = node_info["health_details"]["checks"]["protocol"].get("load", 1.0)
-        load_ok = system_load < 0.8  # ¸ºÔØ²»³¬¹ı80%
+        load_ok = system_load < 0.8  # è´Ÿè½½ä¸è¶…è¿‡80%
     
-        # ¼ì²éÁ¬½ÓÊıÊÇ·ñÔÚºÏÀí·¶Î§
+        # æ£€æŸ¥è¿æ¥æ•°æ˜¯å¦åœ¨åˆç†èŒƒå›´
         connections = node_info["health_details"]["checks"]["protocol"].get("connections", 0)
         max_connections = node_info.get("max_connections", 1000)
-        connections_ok = connections < max_connections * 0.8  # ²»³¬¹ı×î´óÁ¬½ÓÊıµÄ80%
+        connections_ok = connections < max_connections * 0.8  # ä¸è¶…è¿‡æœ€å¤§è¿æ¥æ•°çš„80%
     
         success = latency_ok and load_ok and connections_ok
     
@@ -1364,267 +1482,279 @@ class DistributedAnonymousNetwork:
         }
 
     async def _cleanup_inactive_nodes(self):
-        """ÇåÀí³¤ÆÚ²»»îÔ¾½Úµã"""
+        """æ¸…ç†é•¿æœŸä¸æ´»è·ƒèŠ‚ç‚¹"""
         now = time.time()
         cleanup_count = 0
-        threshold = 3600  # 1Ğ¡Ê±Î´»îÔ¾ÔòÇåÀí
+        threshold = 3600  # 1å°æ—¶æœªæ´»è·ƒåˆ™æ¸…ç†
     
         for node_id in list(self.node_list.keys()):
             node_info = self.node_list[node_id]
             last_seen = node_info.get("last_seen", 0)
         
             if now - last_seen > threshold and not node_info.get("active", False):
-                # ¼ÇÂ¼ÇåÀíÔ­Òò
+                # è®°å½•æ¸…ç†åŸå› 
                 logger.info(
-                    f"ÇåÀí²»»îÔ¾½Úµã {node_id}£¬"
-                    f"×îºó»îÔ¾Ê±¼ä: {time.ctime(last_seen)}"
+                    f"æ¸…ç†ä¸æ´»è·ƒèŠ‚ç‚¹ {node_id}ï¼Œ"
+                    f"æœ€åæ´»è·ƒæ—¶é—´: {time.ctime(last_seen)}"
                 )
             
-                # ´ÓÂ·ÓÉ±íÖĞÒÆ³ı
+                # ä»è·¯ç”±è¡¨ä¸­ç§»é™¤
                 self._remove_node_from_routing(node_id)
             
-                # ´Ó½ÚµãÁĞ±íÖĞÒÆ³ı
+                # ä»èŠ‚ç‚¹åˆ—è¡¨ä¸­ç§»é™¤
                 del self.node_list[node_id]
                 cleanup_count += 1
     
         if cleanup_count > 0:
-            logger.info(f"Íê³É½ÚµãÇåÀí£¬¹²ÒÆ³ı {cleanup_count} ¸ö²»»îÔ¾½Úµã")
+            logger.info(f"å®ŒæˆèŠ‚ç‚¹æ¸…ç†ï¼Œå…±ç§»é™¤ {cleanup_count} ä¸ªä¸æ´»è·ƒèŠ‚ç‚¹")
 
     def _adjust_reputation(self, node_id: str, delta: int):
-        """µ÷Õû½ÚµãĞÅÓş·Ö"""
+        """è°ƒæ•´èŠ‚ç‚¹ä¿¡èª‰åˆ†"""
         if node_id in self.node_list:
             current = self.node_list[node_id].get("reputation", 1000)
-            new_rep = max(0, min(2000, current + delta))  # ÏŞÖÆÔÚ0-2000·¶Î§ÄÚ
+            new_rep = max(0, min(2000, current + delta))  # é™åˆ¶åœ¨0-2000èŒƒå›´å†…
             self.node_list[node_id]["reputation"] = new_rep
             if delta != 0:
-                logger.debug(f"½Úµã {node_id} ĞÅÓş·Öµ÷Õû: {current} ¡ú {new_rep} (¦¤{delta})")
+                logger.debug(f"èŠ‚ç‚¹ {node_id} ä¿¡èª‰åˆ†è°ƒæ•´: {current} â†’ {new_rep} (Î”{delta})")
 
     def _remove_node_from_routing(self, node_id: str):
-        """´ÓÂ·ÓÉ±íÖĞÒÆ³ı½Úµã"""
-        # ÒÆ³ıÒÔ¸Ã½ÚµãÎªÖÕµãµÄÂ·ÓÉ
+        """ä»è·¯ç”±è¡¨ä¸­ç§»é™¤èŠ‚ç‚¹"""
+        # ç§»é™¤ä»¥è¯¥èŠ‚ç‚¹ä¸ºç»ˆç‚¹çš„è·¯ç”±
         for path_key in list(self.routing_table.keys()):
             if node_id in path_key:
                 del self.routing_table[path_key]
     
-        # ¸üĞÂ¾­¹ı¸Ã½ÚµãµÄÂ·ÓÉ
+        # æ›´æ–°ç»è¿‡è¯¥èŠ‚ç‚¹çš„è·¯ç”±
         for path_key, route_info in self.routing_table.items():
             if node_id in route_info.get("path", []):
-                logger.debug(f"Â·ÓÉ {path_key} °üº¬ÒÑÒÆ³ı½Úµã {node_id}£¬ĞèÒªÖØĞÂ¼ÆËã")
-                # ±ê¼ÇÎªĞèÒªÖØĞÂ¼ÆËã
+                logger.debug(f"è·¯ç”± {path_key} åŒ…å«å·²ç§»é™¤èŠ‚ç‚¹ {node_id}ï¼Œéœ€è¦é‡æ–°è®¡ç®—")
+                # æ ‡è®°ä¸ºéœ€è¦é‡æ–°è®¡ç®—
                 route_info["needs_recalculation"] = True
+
+class DNSIntegration:
+    """DNSåŠŸèƒ½ä¸ä¸»ç³»ç»Ÿçš„é›†æˆé€‚é…å™¨"""
     
-async def _dns_maintenance(self):
-    """DNS¼ÇÂ¼Î¬»¤£¨½öD½ÚµãÖ´ĞĞ£©"""
-    if self.identity.node_type != NodeType.D_NODE:
-        return
-
-    try:
-        logger.info("¿ªÊ¼DNS¼ÇÂ¼Î¬»¤Á÷³Ì")
+    def __init__(self, network_system, config_file: str = None):
+        self.network = network_system
+        self.dns_manager = DNSManager(config_file)
+        self.subdomain_pool = set()
+        self.lease_manager = SubdomainLeaseManager()
+        self.registered_nodes = {}  # èŠ‚ç‚¹IDåˆ°å­åŸŸåçš„æ˜ å°„
         
-        # 1. ÑéÖ¤µ±Ç°DNS¼ÇÂ¼×´Ì¬
-        current_records = await self._check_dns_records()
+    async def initialize(self) -> bool:
+        """åˆå§‹åŒ–DNSé›†æˆ"""
+        dns_config = self._extract_dns_config()
         
-        # 2. ¼ì²é¼ÇÂ¼ÓĞĞ§ĞÔºÍTTL
-        records_to_update = []
-        for record in current_records:
-            # ¼ì²éTTLÊÇ·ñµÍÓÚãĞÖµ
-            if record.get('ttl', 0) < self.config.dns_ttl * 0.3:
-                records_to_update.append(record)
-                logger.debug(f"DNS¼ÇÂ¼ {record['name']} TTL²»×ã£¬ĞèÒª¸üĞÂ")
+        if not dns_config:
+            logger.warning("æœªæ‰¾åˆ°DNSé…ç½®ï¼ŒDNSåŠŸèƒ½å°†ç¦ç”¨")
+            return False
+        
+        # é‡æ–°åˆå§‹åŒ–DNSç®¡ç†å™¨ä½¿ç”¨æå–çš„é…ç½®
+        self.dns_manager = DNSManager(self.network.config_file)
+        return await self.dns_manager.initialize()
+    
+    def _extract_dns_config(self) -> Dict[str, Any]:
+        """ä»ä¸»é…ç½®ä¸­æå–DNSé…ç½®"""
+        if not hasattr(self.network, 'config') or not self.network.config:
+            return {}
             
-            # ¼ì²éIPÊÇ·ñ±ä¸ü
-            if record.get('type') == 'A' and record.get('value') != self._get_public_ip():
-                records_to_update.append(record)
-                logger.debug(f"DNS¼ÇÂ¼ {record['name']} IPµØÖ·±ä¸ü£¬ĞèÒª¸üĞÂ")
+        # ä»æ€§èƒ½å‚æ•°ä¸­è·å–DNSé…ç½®
+        perf_params = getattr(self.network.config, 'performance_params', {})
+        dns_config = perf_params.get('dns', {})
         
-        # 3. ´¦ÀíĞÂÔö/¸üĞÂ¼ÇÂ¼
-        if records_to_update:
-            update_result = await self._update_dns_records(records_to_update)
-            if update_result['success']:
-                logger.info(f"³É¹¦¸üĞÂ {len(records_to_update)} ÌõDNS¼ÇÂ¼")
-            else:
-                logger.error(f"DNS¼ÇÂ¼¸üĞÂÊ§°Ü: {update_result['error']}")
-                # ³¢ÊÔ±¸·İDNS·şÎñ
-                if hasattr(self, '_backup_dns_provider'):
-                    logger.info("³¢ÊÔÊ¹ÓÃ±¸·İDNS·şÎñ¸üĞÂ")
-                    backup_result = await self._backup_dns_provider.update_records(records_to_update)
-                    if backup_result['success']:
-                        logger.warning("ÒÑÍ¨¹ı±¸·İDNS·şÎñÍê³É¸üĞÂ")
-                    else:
-                        logger.error(f"±¸·İDNS·şÎñ¸üĞÂÍ¬ÑùÊ§°Ü: {backup_result['error']}")
-        
-        # 4. ÇåÀí¹ıÆÚ×ÓÓòÃû
-        expired_domains = await self._find_expired_subdomains()
-        if expired_domains:
-            cleanup_result = await self._delete_dns_records(expired_domains)
-            if cleanup_result['success']:
-                logger.info(f"³É¹¦ÇåÀí {len(expired_domains)} ¸ö¹ıÆÚ×ÓÓòÃû")
-            else:
-                logger.error(f"¹ıÆÚ×ÓÓòÃûÇåÀíÊ§°Ü: {cleanup_result['error']}")
-        
-        # 5. ¼ÇÂ¼Î¬»¤×´Ì¬
-        self.performance_monitor.record_dns_maintenance({
-            'timestamp': time.time(),
-            'updated': len(records_to_update),
-            'cleaned': len(expired_domains),
-            'status': 'completed'
-        })
-        
-    except Exception as e:
-        logger.error(f"DNS¼ÇÂ¼Î¬»¤Òì³£: {e}", exc_info=True)
-        self.performance_monitor.record_dns_maintenance({
-            'timestamp': time.time(),
-            'status': 'failed',
-            'error': str(e)
-        })
-
-async def _check_dns_records(self) -> List[Dict[str, Any]]:
-    """¼ì²éµ±Ç°DNS¼ÇÂ¼×´Ì¬"""
-    try:
-        # ÊµÏÖ¾ßÌåDNS·şÎñÉÌAPIµ÷ÓÃ£¨ÈçCloudflare¡¢°¢ÀïÔÆDNSµÈ£©
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                'Authorization': f"Bearer {self.config.dns_api_token}",
-                'Content-Type': 'application/json'
+        # å¦‚æœæ²¡æœ‰æ˜¾å¼é…ç½®ï¼Œæ„å»ºé»˜è®¤é…ç½®
+        if not dns_config:
+            dns_config = {
+                'primary_provider': 'cloudflare',
+                'backup_providers': [],
+                'default_zone': getattr(self.network.config, 'scan_domain', 'dsls.top')
             }
             
-            # ¹¹½¨²éÑ¯ÇëÇó£¨Ê¾ÀıÎªCloudflare API¸ñÊ½£©
-            url = f"https://api.cloudflare.com/client/v4/zones/{self.config.dns_zone_id}/dns_records"
-            params = {'name': f"*.{self.config.scan_domain}"}
-            
-            async with session.get(url, headers=headers, params=params) as resp:
-                data = await resp.json()
-                
-                if not data.get('success'):
-                    raise Exception(f"DNS²éÑ¯Ê§°Ü: {data.get('errors', ['Î´Öª´íÎó'])}")
-                
-                # ÌáÈ¡ĞèÒªµÄ¼ÇÂ¼ĞÅÏ¢
-                return [{
-                    'id': record['id'],
-                    'name': record['name'],
-                    'type': record['type'],
-                    'value': record['content'],
-                    'ttl': record['ttl'],
-                    'proxied': record['proxied']
-                } for record in data['result']]
-                
-    except Exception as e:
-        logger.error(f"¼ì²éDNS¼ÇÂ¼Ê§°Ü: {e}")
-        return []
-
-async def _update_dns_records(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """¸üĞÂDNS¼ÇÂ¼"""
-    updated_count = 0
-    errors = []
+        return dns_config
     
-    for record in records:
+    async def acquire_dynamic_subdomain(self, node_id: str, ip_address: str) -> Optional[str]:
+        """ä¸ºèŠ‚ç‚¹è·å–åŠ¨æ€å­åŸŸå"""
+        if not self.dns_manager:
+            return None
+        
         try:
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    'Authorization': f"Bearer {self.config.dns_api_token}",
-                    'Content-Type': 'application/json'
-                }
-                
-                # ¸üĞÂA¼ÇÂ¼IPÎªµ±Ç°¹«ÍøIP
-                if record['type'] == 'A':
-                    record['value'] = self._get_public_ip()
-                
-                # È·±£TTL·ûºÏÅäÖÃ
-                record['ttl'] = self.config.dns_ttl
-                
-                url = f"https://api.cloudflare.com/client/v4/zones/{self.config.dns_zone_id}/dns_records/{record['id']}"
-                async with session.put(url, headers=headers, json=record) as resp:
-                    data = await resp.json()
-                    
-                    if data.get('success'):
-                        updated_count += 1
-                    else:
-                        errors.append(f"¼ÇÂ¼ {record['name']} ¸üĞÂÊ§°Ü: {data.get('errors')}")
-        
-        except Exception as e:
-            errors.append(f"¼ÇÂ¼ {record['name']} ´¦ÀíÒì³£: {str(e)}")
-    
-    return {
-        'success': len(errors) == 0,
-        'updated': updated_count,
-        'errors': errors
-    }
-
-async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
-    """²éÕÒ¹ıÆÚµÄ×ÓÓòÃû¼ÇÂ¼"""
-    expired = []
-    current_time = time.time()
-    
-    # ¼ì²éËùÓĞ¹ØÁªµÄ×ÓÓòÃû£¨¼ÙÉèÔÚ½ÚµãÁĞ±íÖĞÎ¬»¤ÁË×ÓÓòÃûÓ³Éä£©
-    for node_id, node_info in self.node_list.items():
-        if node_info.get('type') == NodeType.U_NODE and 'subdomain' in node_info:
-            # ¼ì²é½ÚµãÊÇ·ñ³¤Ê±¼ä²»»îÔ¾
-            last_seen = node_info.get('last_seen', 0)
-            if current_time - last_seen > self.config.dns_ttl * 2:  # ³¬¹ı2¸öTTLÖÜÆÚÎ´»îÔ¾
-                expired.append({
-                    'name': node_info['subdomain'],
-                    'type': 'A',
-                    'id': node_info.get('dns_record_id')
-                })
-                logger.debug(f"×ÓÓòÃû {node_info['subdomain']} Òò½Úµã¹ıÆÚ½«±»ÇåÀí")
-    
-    return expired
-
-    async def _delete_dns_records(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """É¾³ıDNS¼ÇÂ¼"""
-        deleted_count = 0
-        errors = []
-    
-        for record in records:
-            try:
-                if not record.get('id'):
-                    continue  # Ã»ÓĞ¼ÇÂ¼IDÎŞ·¨É¾³ı
+            # ç”Ÿæˆå”¯ä¸€å­åŸŸå
+            subdomain = self._generate_subdomain_for_node(node_id)
             
-                async with aiohttp.ClientSession() as session:
-                    headers = {
-                        'Authorization': f"Bearer {self.config.dns_api_token}",
-                        'Content-Type': 'application/json'
-                    }
-                
-                    url = f"https://api.cloudflare.com/client/v4/zones/{self.config.dns_zone_id}/dns_records/{record['id']}"
-                    async with session.delete(url, headers=headers) as resp:
-                        data = await resp.json()
-                    
-                        if data.get('success'):
-                            deleted_count += 1
-                        else:
-                            errors.append(f"¼ÇÂ¼ {record['name']} É¾³ıÊ§°Ü: {data.get('errors')}")
-        
-            except Exception as e:
-                errors.append(f"¼ÇÂ¼ {record['name']} É¾³ıÒì³£: {str(e)}")
+            # æ³¨å†Œå­åŸŸå
+            success = await self.dns_manager.register_subdomain(subdomain, ip_address)
+            
+            if success:
+                # è®°å½•ç§Ÿçº¦
+                await self.lease_manager.register_lease(node_id, subdomain, ip_address)
+                self.subdomain_pool.add(subdomain)
+                self.registered_nodes[node_id] = subdomain
+                logger.info(f"èŠ‚ç‚¹ {node_id} è·å–å­åŸŸå: {subdomain}")
+                return subdomain
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"è·å–åŠ¨æ€å­åŸŸåå¼‚å¸¸: {e}")
+            return None
     
-        return {
-            'success': len(errors) == 0,
-            'deleted': deleted_count,
-            'errors': errors
-        }
+    async def update_dynamic_subdomain(self, node_id: str, new_ip: str) -> bool:
+        """æ›´æ–°èŠ‚ç‚¹çš„åŠ¨æ€å­åŸŸåIP"""
+        if not self.dns_manager:
+            return False
+        
+        try:
+            subdomain = self.registered_nodes.get(node_id)
+            if not subdomain:
+                logger.warning(f"èŠ‚ç‚¹ {node_id} æ²¡æœ‰æ³¨å†Œçš„å­åŸŸå")
+                return False
+            
+            # æ›´æ–°DNSè®°å½•
+            success = await self.dns_manager.update_subdomain(subdomain, new_ip)
+            
+            if success:
+                # æ›´æ–°ç§Ÿçº¦ä¿¡æ¯
+                lease = await self.lease_manager.get_lease(node_id)
+                if lease:
+                    lease.ip_address = new_ip
+                    lease.renewed_at = time.time()
+                logger.info(f"èŠ‚ç‚¹ {node_id} å­åŸŸåIPæ›´æ–°: {subdomain} -> {new_ip}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"æ›´æ–°åŠ¨æ€å­åŸŸåå¼‚å¸¸: {e}")
+            return False
+    
+    async def release_dynamic_subdomain(self, node_id: str) -> bool:
+        """é‡Šæ”¾èŠ‚ç‚¹çš„åŠ¨æ€å­åŸŸå"""
+        if not self.dns_manager:
+            return False
+        
+        try:
+            subdomain = self.registered_nodes.get(node_id)
+            if not subdomain:
+                return True  # æ²¡æœ‰å­åŸŸåï¼Œè§†ä¸ºæˆåŠŸ
+            
+            # åˆ é™¤DNSè®°å½•
+            success = await self.dns_manager.delete_subdomain(subdomain)
+            
+            if success:
+                self.subdomain_pool.discard(subdomain)
+                await self.lease_manager.release_lease(node_id)
+                del self.registered_nodes[node_id]
+                logger.info(f"èŠ‚ç‚¹ {node_id} é‡Šæ”¾å­åŸŸå: {subdomain}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"é‡Šæ”¾åŠ¨æ€å­åŸŸåå¼‚å¸¸: {e}")
+            return False
+    
+    def _generate_subdomain_for_node(self, node_id: str) -> str:
+        """ä¸ºèŠ‚ç‚¹ç”Ÿæˆå­åŸŸå"""
+        # ä½¿ç”¨èŠ‚ç‚¹IDå‰8å­—ç¬¦ + éšæœºåç¼€
+        node_prefix = node_id[:8].lower()
+        random_suffix = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=4))
+        
+        # ä½¿ç”¨é…ç½®çš„æ‰«æåŸŸåä½œä¸ºåŸºç¡€
+        base_domain = getattr(self.network.config, 'scan_domain', 'dsls.top')
+        
+        return f"node-{node_prefix}-{random_suffix}.{base_domain}"
+    
+    async def perform_dns_maintenance(self):
+        """æ‰§è¡ŒDNSç»´æŠ¤ä»»åŠ¡"""
+        if not self.dns_manager:
+            return
+        
+        try:
+            # æ¸…ç†è¿‡æœŸè®°å½•
+            await self.dns_manager.cleanup_expired_records()
+            
+            # æ›´æ–°ç§Ÿçº¦çŠ¶æ€
+            await self.lease_manager.cleanup_expired_leases()
+            
+            # æ£€æŸ¥æœåŠ¡å•†çŠ¶æ€
+            status = await self.dns_manager.get_provider_status()
+            logger.debug(f"DNSç»´æŠ¤å®Œæˆï¼ŒçŠ¶æ€: {status}")
+            
+        except Exception as e:
+            logger.error(f"DNSç»´æŠ¤å¼‚å¸¸: {e}")
+    
+    async def get_dns_status(self) -> Dict[str, Any]:
+        """è·å–DNSçŠ¶æ€ä¿¡æ¯"""
+        if not self.dns_manager:
+            return {"enabled": False}
+        
+        try:
+            provider_status = await self.dns_manager.get_provider_status()
+            return {
+                "enabled": True,
+                "registered_nodes": len(self.registered_nodes),
+                "active_subdomains": len(self.subdomain_pool),
+                "provider_status": provider_status,
+                "leases": len(self.lease_manager.leases)
+            }
+        except Exception as e:
+            logger.error(f"è·å–DNSçŠ¶æ€å¼‚å¸¸: {e}")
+            return {"enabled": False, "error": str(e)}
+        
+    async def _dns_maintenance(self):
+        """DNSè®°å½•ç»´æŠ¤ - ä¿®æ”¹ä¸ºä½¿ç”¨DNSé›†æˆ"""
+        if self.identity.node_type != NodeType.D_NODE:
+            return
+
+        try:
+            logger.info("å¼€å§‹DNSè®°å½•ç»´æŠ¤æµç¨‹")
+            
+            # æ£€æŸ¥å½“å‰å­åŸŸåçŠ¶æ€
+            subdomain = self.identity.capabilities.get("dns_subdomain")
+            if not subdomain:
+                logger.warning("DèŠ‚ç‚¹æ²¡æœ‰æ³¨å†Œçš„å­åŸŸåï¼Œè·³è¿‡DNSç»´æŠ¤")
+                return
+            
+            # è·å–å½“å‰å…¬ç½‘IP
+            current_ip = self._get_public_ip()
+            
+            # æ£€æŸ¥IPæ˜¯å¦å˜æ›´ï¼Œå¦‚æœå˜æ›´åˆ™æ›´æ–°DNSè®°å½•
+            if hasattr(self, '_last_public_ip') and self._last_public_ip != current_ip:
+                logger.info(f"æ£€æµ‹åˆ°å…¬ç½‘IPå˜æ›´: {self._last_public_ip} -> {current_ip}")
+                success = await self.dns_integration.update_dynamic_subdomain(
+                    self.identity.node_id, current_ip
+                )
+                if success:
+                    logger.info("DNSè®°å½•æ›´æ–°æˆåŠŸ")
+                    self._last_public_ip = current_ip
+                else:
+                    logger.error("DNSè®°å½•æ›´æ–°å¤±è´¥")
+            
+            # è®°å½•å½“å‰IPç”¨äºä¸‹æ¬¡æ¯”è¾ƒ
+            self._last_public_ip = current_ip
+            
+        except Exception as e:
+            logger.error(f"DNSè®°å½•ç»´æŠ¤å¼‚å¸¸: {e}", exc_info=True)
 
     def _get_public_ip(self) -> str:
-        """»ñÈ¡µ±Ç°¹«ÍøIPµØÖ·"""
+        """è·å–å½“å‰å…¬ç½‘IPåœ°å€"""
         try:
-            # Í¨¹ıµÚÈı·½·şÎñ»ñÈ¡¹«ÍøIP
+            # é€šè¿‡ç¬¬ä¸‰æ–¹æœåŠ¡è·å–å…¬ç½‘IP
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.connect(("8.8.8.8", 80))
                 local_ip = s.getsockname()[0]
         
-            # ¼ì²éÊÇ·ñÎªÄÚÍøIP£¬Èç¹ûÊÇÔòÍ¨¹ıHTTP·şÎñ»ñÈ¡
+            # æ£€æŸ¥æ˜¯å¦ä¸ºå†…ç½‘IPï¼Œå¦‚æœæ˜¯åˆ™é€šè¿‡HTTPæœåŠ¡è·å–
             if self._is_private_ip(local_ip):
                 import requests
                 return requests.get("https://api.ipify.org", timeout=10).text
         
             return local_ip
         except Exception as e:
-            logger.error(f"»ñÈ¡¹«ÍøIPÊ§°Ü: {e}")
-            #  fallbackµ½ÅäÖÃµÄ±¸ÓÃIP
+            logger.error(f"è·å–å…¬ç½‘IPå¤±è´¥: {e}")
+            #  fallbackåˆ°é…ç½®çš„å¤‡ç”¨IP
             return self.config.performance_params.get('fallback_ip', '127.0.0.1')
 
     def _is_private_ip(self, ip: str) -> bool:
-        """ÅĞ¶ÏÊÇ·ñÎªÄÚÍøIP"""
+        """åˆ¤æ–­æ˜¯å¦ä¸ºå†…ç½‘IP"""
         import ipaddress
         try:
             return ipaddress.ip_address(ip).is_private
@@ -1632,42 +1762,42 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
             return False
     
     async def _routing_table_optimization(self):
-        """Â·ÓÉ±íÓÅ»¯"""
-        # ·ÖÎöĞÔÄÜÊı¾İ²¢ÓÅ»¯Â·ÓÉ
+        """è·¯ç”±è¡¨ä¼˜åŒ–"""
+        # åˆ†ææ€§èƒ½æ•°æ®å¹¶ä¼˜åŒ–è·¯ç”±
         performance_data = self.performance_monitor.get_performance_stats()
         
         for path, stats in performance_data.items():
             if stats["success_rate"] < 0.8:
-                # ±ê¼ÇÎÊÌâÂ·¾¶
+                # æ ‡è®°é—®é¢˜è·¯å¾„
                 self.routing_table[path]["weight"] *= 0.8
     
     async def handle_client_request(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
-        """´¦Àí¿Í»§¶ËÇëÇó"""
+        """å¤„ç†å®¢æˆ·ç«¯è¯·æ±‚"""
         try:
-            # ÇëÇó½âÎöºÍ×¼±¸
+            # è¯·æ±‚è§£æå’Œå‡†å¤‡
             parsed_request = await self._parse_request(request_data)
             
-            # ÖÇÄÜ·ÖÆ¬¹æ»®
+            # æ™ºèƒ½åˆ†ç‰‡è§„åˆ’
             fragmentation_plan = await self._plan_fragmentation(parsed_request)
             
-            # »á»°¹ÜÀí³õÊ¼»¯
+            # ä¼šè¯ç®¡ç†åˆå§‹åŒ–
             session = await self.session_manager.create_session(parsed_request, fragmentation_plan)
             
-            # ·ÖÆ¬·â×°Óë·¢ËÍ
+            # åˆ†ç‰‡å°è£…ä¸å‘é€
             await self._fragment_and_send(session, parsed_request)
             
             return {"session_id": session.session_id, "status": "processing"}
             
         except Exception as e:
-            logger.error(f"´¦Àí¿Í»§¶ËÇëÇóÊ§°Ü: {e}")
+            logger.error(f"å¤„ç†å®¢æˆ·ç«¯è¯·æ±‚å¤±è´¥: {e}")
             return {"error": str(e), "status": "failed"}
     
     async def _parse_request(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
-        """½âÎöÇëÇó"""
-        # ÌáÈ¡URLĞÅÏ¢
+        """è§£æè¯·æ±‚"""
+        # æå–URLä¿¡æ¯
         url = request_data.get("url", "")
         
-        # ¹¹½¨HTTPÇëÇó
+        # æ„å»ºHTTPè¯·æ±‚
         http_request = {
             "method": request_data.get("method", "GET"),
             "url": url,
@@ -1675,7 +1805,7 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
             "body": request_data.get("body", b"")
         }
         
-        # ·ÖÎöÇëÇóÌØÕ÷
+        # åˆ†æè¯·æ±‚ç‰¹å¾
         estimated_size = len(http_request["body"]) + len(str(http_request["headers"]))
         content_type = http_request["headers"].get("Content-Type", "unknown")
         
@@ -1687,11 +1817,11 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
         }
     
     async def _plan_fragmentation(self, parsed_request: Dict[str, Any]) -> Dict[str, Any]:
-        """ÖÇÄÜ·ÖÆ¬¹æ»®"""
+        """æ™ºèƒ½åˆ†ç‰‡è§„åˆ’"""
         size = parsed_request["estimated_size"]
         content_type = parsed_request["content_type"]
         
-        # »ùÓÚÇëÇó´óĞ¡Ñ¡Ôñ·ÖÆ¬Êı
+        # åŸºäºè¯·æ±‚å¤§å°é€‰æ‹©åˆ†ç‰‡æ•°
         if size < 1024:  # <1KB
             num_fragments = random.randint(1, 2)
         elif size < 10240:  # 1KB-10KB
@@ -1701,7 +1831,7 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
         else:  # >100KB
             num_fragments = random.randint(10, 20)
         
-        # ÄÚÈİ¸ĞÖª·ÖÆ¬²ßÂÔ
+        # å†…å®¹æ„ŸçŸ¥åˆ†ç‰‡ç­–ç•¥
         if "html" in content_type:
             fragment_strategy = "tag_boundary"
         elif "json" in content_type:
@@ -1711,9 +1841,9 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
         else:
             fragment_strategy = "equal_size"
         
-        # ÈßÓà²ßÂÔ
-        redundancy_factor = 1.5  # Ä¬ÈÏ1.5±¶ÈßÓà
-        if size < 10240:  # Ğ¡ÎÄ¼şÔö¼ÓÈßÓà
+        # å†—ä½™ç­–ç•¥
+        redundancy_factor = 1.5  # é»˜è®¤1.5å€å†—ä½™
+        if size < 10240:  # å°æ–‡ä»¶å¢åŠ å†—ä½™
             redundancy_factor = 2.0
         
         return {
@@ -1724,7 +1854,7 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
         }
     
     async def _fragment_and_send(self, session, parsed_request: Dict[str, Any]):
-        """·ÖÆ¬·â×°Óë·¢ËÍ"""
+        """åˆ†ç‰‡å°è£…ä¸å‘é€"""
         data = parsed_request["http_request"]["body"]
         total_size = len(data)
         fragment_size = total_size // session.fragmentation_plan["num_fragments"]
@@ -1735,7 +1865,7 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
             
             fragment_data = data[start:end]
             
-            # ´´½¨·ÖÆ¬
+            # åˆ›å»ºåˆ†ç‰‡
             fragment = NetworkFragment(
                 session_id=session.session_id,
                 fragment_index=i,
@@ -1747,19 +1877,19 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
                 timestamp=time.time()
             )
             
-            # ·â×°·ÖÆ¬
+            # å°è£…åˆ†ç‰‡
             encapsulated_fragment = await self._encapsulate_fragment(fragment)
             
-            # Ñ¡ÔñÂ·¾¶²¢·¢ËÍ
+            # é€‰æ‹©è·¯å¾„å¹¶å‘é€
             await self._send_fragment(encapsulated_fragment, session)
     
     def _determine_fragment_priority(self, index: int, parsed_request: Dict[str, Any]) -> FragmentPriority:
-        """È·¶¨·ÖÆ¬ÓÅÏÈ¼¶"""
+        """ç¡®å®šåˆ†ç‰‡ä¼˜å…ˆçº§"""
         content_type = parsed_request["content_type"]
         
-        if index == 0:  # µÚÒ»¸ö·ÖÆ¬Í¨³£ÊÇ¹Ø¼üĞÅÏ¢
+        if index == 0:  # ç¬¬ä¸€ä¸ªåˆ†ç‰‡é€šå¸¸æ˜¯å…³é”®ä¿¡æ¯
             return FragmentPriority.HIGH
-        elif "html" in content_type and index < 3:  # HTMLÇ°¼¸¸ö·ÖÆ¬ÖØÒª
+        elif "html" in content_type and index < 3:  # HTMLå‰å‡ ä¸ªåˆ†ç‰‡é‡è¦
             return FragmentPriority.HIGH
         elif "image" in content_type:
             return FragmentPriority.MEDIUM
@@ -1767,8 +1897,8 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
             return FragmentPriority.LOW
     
     async def _encapsulate_fragment(self, fragment: NetworkFragment) -> Dict[str, Any]:
-        """·ÖÆ¬·â×°"""
-        # TCPÀ©Õ¹²ÎÊıÉú³É
+        """åˆ†ç‰‡å°è£…"""
+        # TCPæ‰©å±•å‚æ•°ç”Ÿæˆ
         tcp_params = {
             "session_id": fragment.session_id,
             "total_fragments": fragment.total_fragments,
@@ -1781,7 +1911,7 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
             "ttl": 300
         }
         
-        # ²ÎÊı»ìÏı´¦Àí
+        # å‚æ•°æ··æ·†å¤„ç†
         obfuscated_params = await self._obfuscate_parameters(tcp_params)
         
         return {
@@ -1791,10 +1921,10 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
         }
     
     async def _obfuscate_parameters(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """²ÎÊı»ìÏı´¦Àí"""
+        """å‚æ•°æ··æ·†å¤„ç†"""
         obfuscated = params.copy()
         
-        # ÊıÖµÈÅ¶¯
+        # æ•°å€¼æ‰°åŠ¨
         if "max_hops" in obfuscated:
             obfuscated["max_hops"] += random.randint(-1, 1)
         
@@ -1802,65 +1932,65 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
             perturbation = obfuscated["fragment_size"] * random.uniform(-0.02, 0.02)
             obfuscated["fragment_size"] = int(obfuscated["fragment_size"] + perturbation)
         
-        # Ëæ»úÌî³ä
+        # éšæœºå¡«å……
         obfuscated["padding"] = os.urandom(random.randint(8, 32))
         
-        # ¼ÓÃÜ»ìÏı
+        # åŠ å¯†æ··æ·†
         obfuscated["encrypted_params"] = await self._encrypt_params(json.dumps(obfuscated).encode())
         
         return obfuscated
     
     async def _encrypt_data(self, data: bytes) -> bytes:
-        """¼ÓÃÜÊı¾İ"""
-        # Ê¹ÓÃpycryptodomeµÄChaCha20¼ÓÃÜ
-        key = get_random_bytes(32)  # 32×Ö½ÚÃÜÔ¿
-        nonce = get_random_bytes(8)  # 8×Ö½Únonce£¨pycryptodomeµÄChaCha20ÒªÇó£©
+        """åŠ å¯†æ•°æ®"""
+        # ä½¿ç”¨pycryptodomeçš„ChaCha20åŠ å¯†
+        key = get_random_bytes(32)  # 32å­—èŠ‚å¯†é’¥
+        nonce = get_random_bytes(8)  # 8å­—èŠ‚nonceï¼ˆpycryptodomeçš„ChaCha20è¦æ±‚ï¼‰
         cipher = ChaCha20.new(key=key, nonce=nonce)
         encrypted_data = cipher.encrypt(data)
-        # ·µ»Ønonce+ÃÜÎÄ£¨½âÃÜÊ±ĞèÒªnonce£©
+        # è¿”å›nonce+å¯†æ–‡ï¼ˆè§£å¯†æ—¶éœ€è¦nonceï¼‰
         return nonce + encrypted_data
 
     async def _encrypt_params(self, params: bytes) -> bytes:
-        """¼ÓÃÜ²ÎÊı£¨½áºÏChaCha20¶Ô³Æ¼ÓÃÜÓëSHA-256ÍêÕûĞÔĞ£Ñé£©"""
+        """åŠ å¯†å‚æ•°ï¼ˆç»“åˆChaCha20å¯¹ç§°åŠ å¯†ä¸SHA-256å®Œæ•´æ€§æ ¡éªŒï¼‰"""
         try:
-            # 1. Éú³É»á»°ÃÜÔ¿£¨Ê¹ÓÃ½ÚµãË½Ô¿ÅÉÉú£¬È·±£Ã¿´Î»á»°Î¨Ò»ĞÔ£©
+            # 1. ç”Ÿæˆä¼šè¯å¯†é’¥ï¼ˆä½¿ç”¨èŠ‚ç‚¹ç§é’¥æ´¾ç”Ÿï¼Œç¡®ä¿æ¯æ¬¡ä¼šè¯å”¯ä¸€æ€§ï¼‰
             if not self.identity.private_key:
-                raise ValueError("½ÚµãË½Ô¿Î´³õÊ¼»¯£¬ÎŞ·¨½øĞĞ²ÎÊı¼ÓÃÜ")
+                raise ValueError("èŠ‚ç‚¹ç§é’¥æœªåˆå§‹åŒ–ï¼Œæ— æ³•è¿›è¡Œå‚æ•°åŠ å¯†")
         
-            # ´ÓË½Ô¿ÅÉÉú32×Ö½ÚÃÜÔ¿£¨ÓÃÓÚChaCha20£©
+            # ä»ç§é’¥æ´¾ç”Ÿ32å­—èŠ‚å¯†é’¥ï¼ˆç”¨äºChaCha20ï¼‰
             key_material = hashlib.pbkdf2_hmac(
                 'sha256',
-                self.identity.private_key,  # Ë½Ô¿×÷ÎªÅÉÉú»ù´¡
-                get_random_bytes(16),       # Ëæ»úÑÎÖµ
-                100000,                     # µü´ú´ÎÊı
-                dklen=32                    # Êä³ö32×Ö½ÚÃÜÔ¿
+                self.identity.private_key,  # ç§é’¥ä½œä¸ºæ´¾ç”ŸåŸºç¡€
+                get_random_bytes(16),       # éšæœºç›å€¼
+                100000,                     # è¿­ä»£æ¬¡æ•°
+                dklen=32                    # è¾“å‡º32å­—èŠ‚å¯†é’¥
             )
         
-            # 2. Éú³É8×Ö½Únonce£¨ChaCha20ÒªÇó£©
+            # 2. ç”Ÿæˆ8å­—èŠ‚nonceï¼ˆChaCha20è¦æ±‚ï¼‰
             nonce = get_random_bytes(8)
         
-            # 3. Ê¹ÓÃChaCha20¼ÓÃÜ²ÎÊı
+            # 3. ä½¿ç”¨ChaCha20åŠ å¯†å‚æ•°
             cipher = ChaCha20.new(key=key_material, nonce=nonce)
             encrypted_data = cipher.encrypt(params)
         
-            # 4. ¼ÆËã¼ÓÃÜºóÊı¾İµÄSHA-256¹şÏ££¨È·±£ÍêÕûĞÔ£©
+            # 4. è®¡ç®—åŠ å¯†åæ•°æ®çš„SHA-256å“ˆå¸Œï¼ˆç¡®ä¿å®Œæ•´æ€§ï¼‰
             checksum = hashlib.sha256(encrypted_data).digest()
         
-            # 5. ×éºÏnonce + Ğ£ÑéºÍ + ÃÜÎÄ£¨½âÃÜÊ±Ğè½âÎö£©
-            # ¸ñÊ½£º[8×Ö½Únonce][32×Ö½Úchecksum][¼ÓÃÜÊı¾İ]
+            # 5. ç»„åˆnonce + æ ¡éªŒå’Œ + å¯†æ–‡ï¼ˆè§£å¯†æ—¶éœ€è§£æï¼‰
+            # æ ¼å¼ï¼š[8å­—èŠ‚nonce][32å­—èŠ‚checksum][åŠ å¯†æ•°æ®]
             encrypted_params = nonce + checksum + encrypted_data
         
             return encrypted_params
         except Exception as e:
-            logger.error(f"²ÎÊı¼ÓÃÜÊ§°Ü: {e}")
-            raise  # Å×³öÒì³£¹©ÉÏ²ã´¦Àí
+            logger.error(f"å‚æ•°åŠ å¯†å¤±è´¥: {e}")
+            raise  # æŠ›å‡ºå¼‚å¸¸ä¾›ä¸Šå±‚å¤„ç†
     
     async def _send_fragment(self, encapsulated_fragment: Dict[str, Any], session):
-        """·¢ËÍ·ÖÆ¬"""
-        # Â·¾¶Ñ¡ÔñËã·¨
+        """å‘é€åˆ†ç‰‡"""
+        # è·¯å¾„é€‰æ‹©ç®—æ³•
         available_paths = await self._select_available_paths(encapsulated_fragment)
         
-        # ¸ù¾İÓÅÏÈ¼¶·ÖÅäÂ·¾¶ÊıÁ¿
+        # æ ¹æ®ä¼˜å…ˆçº§åˆ†é…è·¯å¾„æ•°é‡
         priority = encapsulated_fragment["original_fragment"].priority
         if priority == FragmentPriority.HIGH:
             num_paths = 3
@@ -1871,7 +2001,7 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
         
         selected_paths = available_paths[:num_paths]
         
-        # ²¢ĞĞ·¢ËÍ
+        # å¹¶è¡Œå‘é€
         send_tasks = []
         for path in selected_paths:
             task = asyncio.create_task(
@@ -1879,35 +2009,35 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
             )
             send_tasks.append(task)
         
-        # µÈ´ı·¢ËÍÍê³É
+        # ç­‰å¾…å‘é€å®Œæˆ
         await asyncio.gather(*send_tasks, return_exceptions=True)
     
     async def _select_available_paths(self, fragment: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Ñ¡Ôñ¿ÉÓÃÂ·¾¶"""
+        """é€‰æ‹©å¯ç”¨è·¯å¾„"""
         available_nodes = [
             node for node in self.node_list.values() 
             if node.get("active") and node.get("reputation", 0) > 500
         ]
         
-        # ¼ÆËã×ÛºÏÆÀ·Ö
+        # è®¡ç®—ç»¼åˆè¯„åˆ†
         scored_paths = []
         for node in available_nodes:
             score = self._calculate_node_score(node)
             scored_paths.append((score, node))
         
-        # °´ÆÀ·ÖÅÅĞò
+        # æŒ‰è¯„åˆ†æ’åº
         scored_paths.sort(key=lambda x: x[0], reverse=True)
         
         return [path[1] for path in scored_paths]
     
     def _calculate_node_score(self, node: Dict[str, Any]) -> float:
-        """¼ÆËã½Úµã×ÛºÏÆÀ·Ö"""
-        reputation = node.get("reputation", 500) / 1000.0  # ¹éÒ»»¯
-        latency = max(0, 1 - (node.get("latency", 100) / 1000.0))  # ÑÓ³ÙÔ½µÍÔ½ºÃ
-        bandwidth = min(1.0, node.get("bandwidth", 10) / 100.0)  # ´ø¿íÔ½¸ßÔ½ºÃ
+        """è®¡ç®—èŠ‚ç‚¹ç»¼åˆè¯„åˆ†"""
+        reputation = node.get("reputation", 500) / 1000.0  # å½’ä¸€åŒ–
+        latency = max(0, 1 - (node.get("latency", 100) / 1000.0))  # å»¶è¿Ÿè¶Šä½è¶Šå¥½
+        bandwidth = min(1.0, node.get("bandwidth", 10) / 100.0)  # å¸¦å®½è¶Šé«˜è¶Šå¥½
         stability = node.get("stability", 0.5)
         
-        # È¨ÖØ¼ÆËã
+        # æƒé‡è®¡ç®—
         weights = {
             "reputation": 0.4,
             "latency": 0.25,
@@ -1923,55 +2053,59 @@ async def _find_expired_subdomains(self) -> List[Dict[str, Any]]:
         )
     
     async def _send_via_path(self, fragment: Dict[str, Any], path: Dict[str, Any]):
-        """Í¨¹ıÖ¸¶¨Â·¾¶·¢ËÍ·ÖÆ¬"""
+        """é€šè¿‡æŒ‡å®šè·¯å¾„å‘é€åˆ†ç‰‡"""
         try:
-            # ½¨Á¢Á¬½Ó
+            # å»ºç«‹è¿æ¥
             reader, writer = await asyncio.open_connection(
                 path["host"], path["port"]
             )
             
-            # ¹¹½¨·¢ËÍÊı¾İ
+            # æ„å»ºå‘é€æ•°æ®
             send_data = {
                 "fragment": fragment,
                 "timestamp": time.time(),
                 "sender_id": self.identity.node_id
             }
             
-            # ·¢ËÍÊı¾İ
+            # å‘é€æ•°æ®
             data_bytes = json.dumps(send_data).encode()
             writer.write(data_bytes)
             await writer.drain()
             
-            logger.debug(f"·ÖÆ¬Í¨¹ıÂ·¾¶·¢ËÍµ½ {path['host']}:{path['port']}")
+            logger.debug(f"åˆ†ç‰‡é€šè¿‡è·¯å¾„å‘é€åˆ° {path['host']}:{path['port']}")
             
-            # ¹Ø±ÕÁ¬½Ó
+            # å…³é—­è¿æ¥
             writer.close()
             await writer.wait_closed()
             
         except Exception as e:
-            logger.warning(f"Í¨¹ıÂ·¾¶·¢ËÍÊ§°Ü: {e}")
+            logger.warning(f"é€šè¿‡è·¯å¾„å‘é€å¤±è´¥: {e}")
     
     async def stop(self):
-        """Í£Ö¹ÏµÍ³"""
-        logger.info("ÕıÔÚÍ£Ö¹·Ö²¼Ê½ÄäÃûÍøÂçÏµÍ³...")
+        """åœæ­¢ç³»ç»Ÿ - æ·»åŠ DNSæ¸…ç†"""
+        logger.info("æ­£åœ¨åœæ­¢åˆ†å¸ƒå¼åŒ¿åç½‘ç»œç³»ç»Ÿ...")
         self.is_running = False
         
-        # Í£Ö¹ËùÓĞ·şÎñ
+        # é‡Šæ”¾DNSå­åŸŸåï¼ˆä»…DèŠ‚ç‚¹ï¼‰
+        if hasattr(self, 'identity') and self.identity and self.identity.node_type == NodeType.D_NODE:
+            await self.dns_integration.release_dynamic_subdomain(self.identity.node_id)
+        
+        # åœæ­¢æ‰€æœ‰æœåŠ¡
         for service_name, service in self.core_services.items():
             if hasattr(service, 'stop'):
                 await service.stop()
         
-        logger.info("ÏµÍ³ÒÑÍ£Ö¹")
+        logger.info("ç³»ç»Ÿå·²åœæ­¢")
 
 class SessionManager:
-    """»á»°¹ÜÀíÆ÷"""
+    """ä¼šè¯ç®¡ç†å™¨"""
     
     def __init__(self):
         self.sessions = {}
         self.fragment_buffers = defaultdict(dict)
     
     async def create_session(self, parsed_request: Dict[str, Any], fragmentation_plan: Dict[str, Any]) -> 'Session':
-        """´´½¨ĞÂ»á»°"""
+        """åˆ›å»ºæ–°ä¼šè¯"""
         session_id = hashlib.sha256(
             f"{time.time()}{random.getrandbits(128)}".encode()
         ).hexdigest()[:16]
@@ -1987,17 +2121,17 @@ class SessionManager:
         return session
     
     async def receive_fragment(self, fragment: NetworkFragment):
-        """½ÓÊÕ·ÖÆ¬"""
+        """æ¥æ”¶åˆ†ç‰‡"""
         session_id = fragment.session_id
         
         if session_id not in self.sessions:
-            logger.warning(f"ÊÕµ½Î´Öª»á»°µÄ·ÖÆ¬: {session_id}")
+            logger.warning(f"æ”¶åˆ°æœªçŸ¥ä¼šè¯çš„åˆ†ç‰‡: {session_id}")
             return
         
-        # ´æ´¢·ÖÆ¬
+        # å­˜å‚¨åˆ†ç‰‡
         self.fragment_buffers[session_id][fragment.fragment_index] = fragment
         
-        # ¼ì²éÊÇ·ñËùÓĞ·ÖÆ¬¶¼ÒÑÊÕµ½
+        # æ£€æŸ¥æ˜¯å¦æ‰€æœ‰åˆ†ç‰‡éƒ½å·²æ”¶åˆ°
         session = self.sessions[session_id]
         received_count = len(self.fragment_buffers[session_id])
         
@@ -2005,52 +2139,52 @@ class SessionManager:
             await self._reassemble_session(session_id)
     
     async def _reassemble_session(self, session_id: str):
-        """ÖØ×é»á»°Êı¾İ"""
+        """é‡ç»„ä¼šè¯æ•°æ®"""
         fragments = self.fragment_buffers[session_id]
         
-        # °´Ë÷ÒıÅÅĞò·ÖÆ¬
+        # æŒ‰ç´¢å¼•æ’åºåˆ†ç‰‡
         sorted_fragments = [fragments[i] for i in sorted(fragments.keys())]
         
-        # ÖØ×éÊı¾İ
+        # é‡ç»„æ•°æ®
         reassembled_data = b"".join(fragment.data for fragment in sorted_fragments)
         
-        # ÑéÖ¤Êı¾İÍêÕûĞÔ
+        # éªŒè¯æ•°æ®å®Œæ•´æ€§
         if self._verify_reassembled_data(reassembled_data, sorted_fragments):
             session = self.sessions[session_id]
             session.reassembled_data = reassembled_data
             session.completed_at = time.time()
             
-            logger.info(f"»á»° {session_id} Êı¾İÖØ×éÍê³É")
+            logger.info(f"ä¼šè¯ {session_id} æ•°æ®é‡ç»„å®Œæˆ")
             
-            # ÇåÀí»º³åÇø
+            # æ¸…ç†ç¼“å†²åŒº
             del self.fragment_buffers[session_id]
             
-            # ´¥·¢ÏìÓ¦´¦Àí
+            # è§¦å‘å“åº”å¤„ç†
             await self._handle_completed_session(session)
     
     def _verify_reassembled_data(self, data: bytes, fragments: List[NetworkFragment]) -> bool:
-        """ÑéÖ¤ÖØ×éÊı¾İÍêÕûĞÔ"""
-        # ¼ì²é×Ü´óĞ¡
+        """éªŒè¯é‡ç»„æ•°æ®å®Œæ•´æ€§"""
+        # æ£€æŸ¥æ€»å¤§å°
         total_size = sum(len(fragment.data) for fragment in fragments)
         if len(data) != total_size:
-            logger.warning("ÖØ×éÊı¾İ´óĞ¡²»Æ¥Åä")
+            logger.warning("é‡ç»„æ•°æ®å¤§å°ä¸åŒ¹é…")
             return False
         
-        # ÑéÖ¤·ÖÆ¬Ğ£ÑéºÍ
+        # éªŒè¯åˆ†ç‰‡æ ¡éªŒå’Œ
         for fragment in fragments:
             if hashlib.md5(fragment.data).hexdigest() != fragment.checksum:
-                logger.warning(f"·ÖÆ¬ {fragment.fragment_index} Ğ£ÑéºÍÊ§°Ü")
+                logger.warning(f"åˆ†ç‰‡ {fragment.fragment_index} æ ¡éªŒå’Œå¤±è´¥")
                 return False
         
         return True
     
     async def _handle_completed_session(self, session: 'Session'):
-        """´¦ÀíÍê³ÉµÄ»á»°"""
-        # ÕâÀïÓ¦¸Ã½«ÖØ×éµÄÊı¾İ´«µİ¸ø³ö¿Ú½Úµã»òÖ±½ÓÏìÓ¦
-        logger.info(f"´¦ÀíÍê³É»á»°: {session.session_id}")
+        """å¤„ç†å®Œæˆçš„ä¼šè¯"""
+        # è¿™é‡Œåº”è¯¥å°†é‡ç»„çš„æ•°æ®ä¼ é€’ç»™å‡ºå£èŠ‚ç‚¹æˆ–ç›´æ¥å“åº”
+        logger.info(f"å¤„ç†å®Œæˆä¼šè¯: {session.session_id}")
 
 class Session:
-    """»á»°Àà"""
+    """ä¼šè¯ç±»"""
     
     def __init__(self, session_id: str, request: Dict[str, Any], 
                  fragmentation_plan: Dict[str, Any], created_at: float):
@@ -2063,7 +2197,7 @@ class Session:
         self.status = "active"
 
 class PerformanceMonitor:
-    """ĞÔÄÜ¼à¿ØÆ÷"""
+    """æ€§èƒ½ç›‘æ§å™¨"""
     
     def __init__(self):
         self.metrics = {
@@ -2075,19 +2209,19 @@ class PerformanceMonitor:
         self.start_time = time.time()
     
     def record_latency(self, latency: float):
-        """¼ÇÂ¼ÑÓ³Ù"""
+        """è®°å½•å»¶è¿Ÿ"""
         self.metrics["latency"].append(latency)
     
     def record_throughput(self, throughput: float):
-        """¼ÇÂ¼ÍÌÍÂÁ¿"""
+        """è®°å½•ååé‡"""
         self.metrics["throughput"].append(throughput)
     
     def record_error(self, error_type: str):
-        """¼ÇÂ¼´íÎó"""
+        """è®°å½•é”™è¯¯"""
         self.metrics["error_rate"].append(error_type)
     
     def get_performance_stats(self) -> Dict[str, Any]:
-        """»ñÈ¡ĞÔÄÜÍ³¼Æ"""
+        """è·å–æ€§èƒ½ç»Ÿè®¡"""
         latencies = list(self.metrics["latency"])
         throughputs = list(self.metrics["throughput"])
         
@@ -2103,42 +2237,42 @@ class PerformanceMonitor:
         return stats
 
 class TCPExtensionStack:
-    """TCPÀ©Õ¹Ğ­ÒéÕ»"""
+    """TCPæ‰©å±•åè®®æ ˆ"""
     
     def __init__(self, network: DistributedAnonymousNetwork):
         self.network = network
         self.is_running = False
     
     async def start(self):
-        """Æô¶¯TCPÀ©Õ¹Ğ­ÒéÕ»"""
+        """å¯åŠ¨TCPæ‰©å±•åè®®æ ˆ"""
         self.is_running = True
-        # Æô¶¯TCP¼àÌıÆ÷
+        # å¯åŠ¨TCPç›‘å¬å™¨
         asyncio.create_task(self._tcp_listener())
     
     async def stop(self):
-        """Í£Ö¹TCPÀ©Õ¹Ğ­ÒéÕ»"""
+        """åœæ­¢TCPæ‰©å±•åè®®æ ˆ"""
         self.is_running = False
     
     async def _tcp_listener(self):
-        """TCP¼àÌıÆ÷ - ´¦Àí incoming Á¬½ÓºÍÏûÏ¢"""
-        # ´ÓÅäÖÃÖĞ»ñÈ¡¶Ë¿Ú·¶Î§
+        """TCPç›‘å¬å™¨ - å¤„ç† incoming è¿æ¥å’Œæ¶ˆæ¯"""
+        # ä»é…ç½®ä¸­è·å–ç«¯å£èŒƒå›´
         min_port, max_port = self.config.tcp_port_range
         listen_port = random.randint(min_port, max_port)
     
-        logger.info(f"Æô¶¯TCP¼àÌıÆ÷£¬¼àÌı¶Ë¿Ú: {listen_port}")
+        logger.info(f"å¯åŠ¨TCPç›‘å¬å™¨ï¼Œç›‘å¬ç«¯å£: {listen_port}")
     
-        # Æô¶¯TCP·şÎñÆ÷
+        # å¯åŠ¨TCPæœåŠ¡å™¨
         server = await asyncio.start_server(
             self._handle_tcp_connection,
-            '0.0.0.0',  # ¼àÌıËùÓĞ¿ÉÓÃÍøÂç½Ó¿Ú
+            '0.0.0.0',  # ç›‘å¬æ‰€æœ‰å¯ç”¨ç½‘ç»œæ¥å£
             listen_port
         )
     
-        # Èç¹ûÆôÓÃUPnP£¬ÉèÖÃ¶Ë¿ÚÓ³Éä
+        # å¦‚æœå¯ç”¨UPnPï¼Œè®¾ç½®ç«¯å£æ˜ å°„
         if self.config.upnp_enabled:
             await self._setup_upnp_port_mapping(listen_port)
     
-        # ¼ÇÂ¼¼àÌıĞÅÏ¢
+        # è®°å½•ç›‘å¬ä¿¡æ¯
         self.core_services['tcp_listener'] = {
             'port': listen_port,
             'status': 'running',
@@ -2149,96 +2283,96 @@ class TCPExtensionStack:
             async with server:
                 await server.serve_forever()
         except Exception as e:
-            logger.error(f"TCP¼àÌıÆ÷Òì³£: {e}")
+            logger.error(f"TCPç›‘å¬å™¨å¼‚å¸¸: {e}")
             self.core_services['tcp_listener']['status'] = 'error'
         finally:
             if self.config.upnp_enabled:
                 await self._remove_upnp_port_mapping(listen_port)
             self.core_services['tcp_listener']['status'] = 'stopped'
-            logger.info("TCP¼àÌıÆ÷ÒÑÍ£Ö¹")
+            logger.info("TCPç›‘å¬å™¨å·²åœæ­¢")
 
     async def _handle_tcp_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        """´¦ÀíĞÂµÄTCPÁ¬½Ó"""
+        """å¤„ç†æ–°çš„TCPè¿æ¥"""
         peer_addr = writer.get_extra_info('peername')
-        logger.info(f"ĞÂµÄTCPÁ¬½ÓÀ´×Ô: {peer_addr}")
+        logger.info(f"æ–°çš„TCPè¿æ¥æ¥è‡ª: {peer_addr}")
     
-        # ¼ÇÂ¼Á¬½ÓÍ³¼Æ
+        # è®°å½•è¿æ¥ç»Ÿè®¡
         self.performance_monitor.record_connection(peer_addr)
     
         try:
-            # ½»»»½ÚµãÉí·İĞÅÏ¢
+            # äº¤æ¢èŠ‚ç‚¹èº«ä»½ä¿¡æ¯
             if not await self._exchange_identity(reader, writer):
-                logger.warning(f"Óë {peer_addr} µÄÉí·İÑéÖ¤Ê§°Ü£¬¹Ø±ÕÁ¬½Ó")
+                logger.warning(f"ä¸ {peer_addr} çš„èº«ä»½éªŒè¯å¤±è´¥ï¼Œå…³é—­è¿æ¥")
                 return
         
-            # ³ÖĞø´¦ÀíÏûÏ¢
+            # æŒç»­å¤„ç†æ¶ˆæ¯
             while True:
-                # ¶ÁÈ¡ÏûÏ¢³¤¶È (4×Ö½Ú£¬´ó¶Ë¸ñÊ½)
+                # è¯»å–æ¶ˆæ¯é•¿åº¦ (4å­—èŠ‚ï¼Œå¤§ç«¯æ ¼å¼)
                 length_data = await reader.readexactly(4)
                 message_length = struct.unpack('>I', length_data)[0]
             
-                # ¶ÁÈ¡ÏûÏ¢ÄÚÈİ
+                # è¯»å–æ¶ˆæ¯å†…å®¹
                 data = await reader.readexactly(message_length)
             
-                # ½âÃÜÏûÏ¢
+                # è§£å¯†æ¶ˆæ¯
                 decrypted_data = await self._decrypt_message(data)
             
-                # ½âÎöÏûÏ¢
+                # è§£ææ¶ˆæ¯
                 message = self._parse_message(decrypted_data)
             
-                # ´¦ÀíÏûÏ¢²¢»ñÈ¡ÏìÓ¦
+                # å¤„ç†æ¶ˆæ¯å¹¶è·å–å“åº”
                 response = await self._process_message(message, peer_addr)
             
                 if response:
-                    # ¼ÓÃÜÏìÓ¦
+                    # åŠ å¯†å“åº”
                     encrypted_response = await self._encrypt_message(response)
                 
-                    # ·¢ËÍÏìÓ¦³¤¶ÈºÍÄÚÈİ
+                    # å‘é€å“åº”é•¿åº¦å’Œå†…å®¹
                     writer.write(struct.pack('>I', len(encrypted_response)))
                     writer.write(encrypted_response)
                     await writer.drain()
                 
-                # ¼ì²éÊÇ·ñĞèÒª¹Ø±ÕÁ¬½Ó
+                # æ£€æŸ¥æ˜¯å¦éœ€è¦å…³é—­è¿æ¥
                 if message.get('type') == 'disconnect':
                     break
                 
         except (asyncio.IncompleteReadError, ConnectionResetError):
-            logger.info(f"Óë {peer_addr} µÄÁ¬½ÓÒÑ¹Ø±Õ")
+            logger.info(f"ä¸ {peer_addr} çš„è¿æ¥å·²å…³é—­")
         except Exception as e:
-            logger.error(f"´¦ÀíTCPÁ¬½ÓÊ±³ö´í {peer_addr}: {e}")
+            logger.error(f"å¤„ç†TCPè¿æ¥æ—¶å‡ºé”™ {peer_addr}: {e}")
         finally:
-            # ÇåÀíÁ¬½Ó
+            # æ¸…ç†è¿æ¥
             writer.close()
             await writer.wait_closed()
             self.performance_monitor.record_disconnection(peer_addr)
-            logger.info(f"Óë {peer_addr} µÄÁ¬½ÓÒÑ¹Ø±Õ")
+            logger.info(f"ä¸ {peer_addr} çš„è¿æ¥å·²å…³é—­")
 
     async def _exchange_identity(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> bool:
-        """ÓëÁ¬½ÓµÄ½Úµã½»»»Éí·İĞÅÏ¢²¢ÑéÖ¤"""
-        # ·¢ËÍ×Ô¼ºµÄÉí·İĞÅÏ¢ (¹«Ô¿)
+        """ä¸è¿æ¥çš„èŠ‚ç‚¹äº¤æ¢èº«ä»½ä¿¡æ¯å¹¶éªŒè¯"""
+        # å‘é€è‡ªå·±çš„èº«ä»½ä¿¡æ¯ (å…¬é’¥)
         identity_data = json.dumps({
             'node_id': self.identity.node_id,
             'public_key': base64.b64encode(self.identity.public_key).decode(),
             'node_type': self.identity.node_type.value
         }).encode()
     
-        # ·¢ËÍÉí·İĞÅÏ¢³¤¶ÈºÍÄÚÈİ
+        # å‘é€èº«ä»½ä¿¡æ¯é•¿åº¦å’Œå†…å®¹
         writer.write(struct.pack('>I', len(identity_data)))
         writer.write(identity_data)
         await writer.drain()
     
-        # ½ÓÊÕ¶Ô·½Éí·İĞÅÏ¢
+        # æ¥æ”¶å¯¹æ–¹èº«ä»½ä¿¡æ¯
         length_data = await reader.readexactly(4)
         identity_length = struct.unpack('>I', length_data)[0]
         peer_identity_data = await reader.readexactly(identity_length)
         peer_identity = json.loads(peer_identity_data.decode())
     
-        # ÑéÖ¤¶Ô·½Éí·İ
+        # éªŒè¯å¯¹æ–¹èº«ä»½
         try:
             peer_public_key = RSA.import_key(base64.b64decode(peer_identity['public_key']))
-            # ÕâÀï¿ÉÒÔÌí¼Ó¸üÑÏ¸ñµÄÉí·İÑéÖ¤Âß¼­
+            # è¿™é‡Œå¯ä»¥æ·»åŠ æ›´ä¸¥æ ¼çš„èº«ä»½éªŒè¯é€»è¾‘
         
-            # ¼ÇÂ¼½ÚµãĞÅÏ¢
+            # è®°å½•èŠ‚ç‚¹ä¿¡æ¯
             self.node_list[peer_identity['node_id']] = {
                 'address': writer.get_extra_info('peername'),
                 'public_key': peer_public_key,
@@ -2246,88 +2380,88 @@ class TCPExtensionStack:
                 'last_seen': time.time()
             }
         
-            logger.info(f"³É¹¦ÑéÖ¤½Úµã {peer_identity['node_id']} µÄÉí·İ")
+            logger.info(f"æˆåŠŸéªŒè¯èŠ‚ç‚¹ {peer_identity['node_id']} çš„èº«ä»½")
             return True
         except Exception as e:
-            logger.warning(f"ÑéÖ¤½ÚµãÉí·İÊ§°Ü: {e}")
+            logger.warning(f"éªŒè¯èŠ‚ç‚¹èº«ä»½å¤±è´¥: {e}")
             return False
 
     async def _encrypt_message(self, message: Dict[str, Any]) -> bytes:
-        """¼ÓÃÜÏûÏ¢"""
-        # ĞòÁĞ»¯ÏûÏ¢
+        """åŠ å¯†æ¶ˆæ¯"""
+        # åºåˆ—åŒ–æ¶ˆæ¯
         message_data = json.dumps(message).encode()
     
-        # Éú³ÉËæ»úÃÜÔ¿
-        key = get_random_bytes(32)  # ChaCha20Ê¹ÓÃ32×Ö½ÚÃÜÔ¿
+        # ç”Ÿæˆéšæœºå¯†é’¥
+        key = get_random_bytes(32)  # ChaCha20ä½¿ç”¨32å­—èŠ‚å¯†é’¥
     
-        # Ê¹ÓÃChaCha20¼ÓÃÜ
-        nonce = get_random_bytes(12)  # 96Î»nonce
+        # ä½¿ç”¨ChaCha20åŠ å¯†
+        nonce = get_random_bytes(12)  # 96ä½nonce
         cipher = ChaCha20.new(key=key, nonce=nonce)
         encrypted_data = cipher.encrypt(message_data)
     
-        # Ê¹ÓÃ½ÓÊÕ·½¹«Ô¿¼ÓÃÜÃÜÔ¿ (ÕâÀï¼ò»¯´¦Àí£¬Êµ¼ÊÓ¦Ê¹ÓÃÄ¿±ê½ÚµãµÄ¹«Ô¿)
-        # ´Ó½ÚµãÁĞ±í»ñÈ¡Ä¿±ê¹«Ô¿µÄÂß¼­ĞèÒª¸ù¾İÊµ¼ÊÇé¿öÊµÏÖ
+        # ä½¿ç”¨æ¥æ”¶æ–¹å…¬é’¥åŠ å¯†å¯†é’¥ (è¿™é‡Œç®€åŒ–å¤„ç†ï¼Œå®é™…åº”ä½¿ç”¨ç›®æ ‡èŠ‚ç‚¹çš„å…¬é’¥)
+        # ä»èŠ‚ç‚¹åˆ—è¡¨è·å–ç›®æ ‡å…¬é’¥çš„é€»è¾‘éœ€è¦æ ¹æ®å®é™…æƒ…å†µå®ç°
         target_node_id = message.get('target_node_id')
         if not target_node_id or target_node_id not in self.node_list:
-            raise ValueError("Ä¿±ê½Úµã²»´æÔÚ»òÎ´Ö¸¶¨")
+            raise ValueError("ç›®æ ‡èŠ‚ç‚¹ä¸å­˜åœ¨æˆ–æœªæŒ‡å®š")
         
         target_public_key = self.node_list[target_node_id]['public_key']
         cipher_rsa = PKCS1_OAEP.new(target_public_key)
         encrypted_key = cipher_rsa.encrypt(key)
     
-        # ×éºÏ: ¼ÓÃÜµÄÃÜÔ¿³¤¶È(4×Ö½Ú) + ¼ÓÃÜµÄÃÜÔ¿ + nonce(12×Ö½Ú) + ¼ÓÃÜµÄÊı¾İ
+        # ç»„åˆ: åŠ å¯†çš„å¯†é’¥é•¿åº¦(4å­—èŠ‚) + åŠ å¯†çš„å¯†é’¥ + nonce(12å­—èŠ‚) + åŠ å¯†çš„æ•°æ®
         return struct.pack('>I', len(encrypted_key)) + encrypted_key + nonce + encrypted_data
 
     async def _decrypt_message(self, data: bytes) -> Dict[str, Any]:
-        """½âÃÜÏûÏ¢"""
-        # ½âÎöÊı¾İ½á¹¹
+        """è§£å¯†æ¶ˆæ¯"""
+        # è§£ææ•°æ®ç»“æ„
         key_length = struct.unpack('>I', data[:4])[0]
         key_end = 4 + key_length
-        nonce_end = key_end + 12  # nonce³¤¶ÈÎª12×Ö½Ú
+        nonce_end = key_end + 12  # nonceé•¿åº¦ä¸º12å­—èŠ‚
     
         encrypted_key = data[4:key_end]
         nonce = data[key_end:nonce_end]
         encrypted_data = data[nonce_end:]
     
-        # Ê¹ÓÃË½Ô¿½âÃÜÃÜÔ¿
+        # ä½¿ç”¨ç§é’¥è§£å¯†å¯†é’¥
         private_key = RSA.import_key(self.identity.private_key)
         cipher_rsa = PKCS1_OAEP.new(private_key)
         key = cipher_rsa.decrypt(encrypted_key)
     
-        # Ê¹ÓÃChaCha20½âÃÜÊı¾İ
+        # ä½¿ç”¨ChaCha20è§£å¯†æ•°æ®
         cipher = ChaCha20.new(key=key, nonce=nonce)
         decrypted_data = cipher.decrypt(encrypted_data)
     
-        # ·´ĞòÁĞ»¯ÏûÏ¢
+        # ååºåˆ—åŒ–æ¶ˆæ¯
         return json.loads(decrypted_data.decode())
 
     def _parse_message(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """½âÎöÏûÏ¢ÄÚÈİ"""
-        # ÑéÖ¤ÏûÏ¢ÍêÕûĞÔ
+        """è§£ææ¶ˆæ¯å†…å®¹"""
+        # éªŒè¯æ¶ˆæ¯å®Œæ•´æ€§
         if 'checksum' not in data:
-            raise ValueError("ÏûÏ¢È±ÉÙĞ£ÑéºÍ")
+            raise ValueError("æ¶ˆæ¯ç¼ºå°‘æ ¡éªŒå’Œ")
         
         message_data = {k: v for k, v in data.items() if k != 'checksum'}
         checksum = self._calculate_checksum(message_data)
     
         if checksum != data['checksum']:
-            raise ValueError("ÏûÏ¢Ğ£ÑéºÍ²»Æ¥Åä£¬¿ÉÄÜ±»´Û¸Ä")
+            raise ValueError("æ¶ˆæ¯æ ¡éªŒå’Œä¸åŒ¹é…ï¼Œå¯èƒ½è¢«ç¯¡æ”¹")
         
         return data
 
     def _calculate_checksum(self, data: Dict[str, Any]) -> str:
-        """¼ÆËãÏûÏ¢Ğ£ÑéºÍ"""
+        """è®¡ç®—æ¶ˆæ¯æ ¡éªŒå’Œ"""
         data_str = json.dumps(data, sort_keys=True).encode()
         return hashlib.sha256(data_str).hexdigest()
 
     async def _process_message(self, message: Dict[str, Any], peer_addr: Tuple[str, int]) -> Optional[Dict[str, Any]]:
-        """´¦ÀíÊÕµ½µÄÏûÏ¢²¢·µ»ØÏìÓ¦"""
+        """å¤„ç†æ”¶åˆ°çš„æ¶ˆæ¯å¹¶è¿”å›å“åº”"""
         message_type = message.get('type')
-        logger.info(f"ÊÕµ½À´×Ô {peer_addr} µÄÏûÏ¢ÀàĞÍ: {message_type}")
+        logger.info(f"æ”¶åˆ°æ¥è‡ª {peer_addr} çš„æ¶ˆæ¯ç±»å‹: {message_type}")
     
         try:
             if message_type == 'ping':
-                # ´¦ÀíĞÄÌøÏûÏ¢
+                # å¤„ç†å¿ƒè·³æ¶ˆæ¯
                 return {
                     'type': 'pong',
                     'node_id': self.identity.node_id,
@@ -2340,7 +2474,7 @@ class TCPExtensionStack:
                 }
             
             elif message_type == 'discover':
-                # ´¦Àí½Úµã·¢ÏÖÇëÇó
+                # å¤„ç†èŠ‚ç‚¹å‘ç°è¯·æ±‚
                 nearby_nodes = self._get_nearby_nodes(limit=5)
                 return {
                     'type': 'discover_response',
@@ -2352,7 +2486,7 @@ class TCPExtensionStack:
                 }
             
             elif message_type == 'fragment':
-                # ´¦ÀíÊı¾İ·ÖÆ¬
+                # å¤„ç†æ•°æ®åˆ†ç‰‡
                 fragment = NetworkFragment(
                     session_id=message['session_id'],
                     fragment_index=message['fragment_index'],
@@ -2364,10 +2498,10 @@ class TCPExtensionStack:
                     timestamp=message['timestamp']
                 )
             
-                # ½»¸ø»á»°¹ÜÀíÆ÷´¦Àí
+                # äº¤ç»™ä¼šè¯ç®¡ç†å™¨å¤„ç†
                 self.session_manager.add_fragment(fragment)
             
-                # ·µ»ØÈ·ÈÏ
+                # è¿”å›ç¡®è®¤
                 return {
                     'type': 'fragment_ack',
                     'session_id': fragment.session_id,
@@ -2382,29 +2516,29 @@ class TCPExtensionStack:
                 }
             
             elif message_type == 'disconnect':
-                # ´¦Àí¶Ï¿ªÁ¬½ÓÇëÇó
+                # å¤„ç†æ–­å¼€è¿æ¥è¯·æ±‚
                 return {
                     'type': 'disconnect_ack',
-                    'message': 'Á¬½ÓÒÑ¹Ø±Õ',
+                    'message': 'è¿æ¥å·²å…³é—­',
                     'checksum': self._calculate_checksum({
                         'type': 'disconnect_ack',
-                        'message': 'Á¬½ÓÒÑ¹Ø±Õ'
+                        'message': 'è¿æ¥å·²å…³é—­'
                     })
                 }
             
             else:
-                logger.warning(f"ÊÕµ½Î´ÖªÀàĞÍµÄÏûÏ¢: {message_type}")
+                logger.warning(f"æ”¶åˆ°æœªçŸ¥ç±»å‹çš„æ¶ˆæ¯: {message_type}")
                 return {
                     'type': 'error',
-                    'message': f'Î´ÖªÏûÏ¢ÀàĞÍ: {message_type}',
+                    'message': f'æœªçŸ¥æ¶ˆæ¯ç±»å‹: {message_type}',
                     'checksum': self._calculate_checksum({
                         'type': 'error',
-                        'message': f'Î´ÖªÏûÏ¢ÀàĞÍ: {message_type}'
+                        'message': f'æœªçŸ¥æ¶ˆæ¯ç±»å‹: {message_type}'
                     })
                 }
             
         except Exception as e:
-            logger.error(f"´¦ÀíÏûÏ¢Ê±³ö´í: {e}")
+            logger.error(f"å¤„ç†æ¶ˆæ¯æ—¶å‡ºé”™: {e}")
             return {
                 'type': 'error',
                 'message': str(e),
@@ -2415,17 +2549,17 @@ class TCPExtensionStack:
             }
 
     async def _setup_upnp_port_mapping(self, port: int):
-        """ÉèÖÃUPnP¶Ë¿ÚÓ³Éä"""
+        """è®¾ç½®UPnPç«¯å£æ˜ å°„"""
         try:
             devices = upnpclient.discover()
             if not devices:
-                logger.warning("Î´·¢ÏÖUPnPÉè±¸£¬ÎŞ·¨ÉèÖÃ¶Ë¿ÚÓ³Éä")
+                logger.warning("æœªå‘ç°UPnPè®¾å¤‡ï¼Œæ— æ³•è®¾ç½®ç«¯å£æ˜ å°„")
                 return
             
             gateway = devices[0]
             internal_ip = self._get_local_ip()
         
-            # Ìí¼Ó¶Ë¿ÚÓ³Éä
+            # æ·»åŠ ç«¯å£æ˜ å°„
             gateway.AddPortMapping(
                 NewRemoteHost='',
                 NewExternalPort=port,
@@ -2434,16 +2568,16 @@ class TCPExtensionStack:
                 NewInternalClient=internal_ip,
                 NewEnabled='1',
                 NewPortMappingDescription='Distributed Anonymous Network TCP',
-                NewLeaseDuration=3600  # 1Ğ¡Ê±ÓĞĞ§ÆÚ
+                NewLeaseDuration=3600  # 1å°æ—¶æœ‰æ•ˆæœŸ
             )
         
-            logger.info(f"ÒÑÉèÖÃUPnP¶Ë¿ÚÓ³Éä: Íâ²¿¶Ë¿Ú {port} -> ÄÚ²¿ {internal_ip}:{port}")
+            logger.info(f"å·²è®¾ç½®UPnPç«¯å£æ˜ å°„: å¤–éƒ¨ç«¯å£ {port} -> å†…éƒ¨ {internal_ip}:{port}")
         
         except Exception as e:
-            logger.warning(f"ÉèÖÃUPnP¶Ë¿ÚÓ³ÉäÊ§°Ü: {e}")
+            logger.warning(f"è®¾ç½®UPnPç«¯å£æ˜ å°„å¤±è´¥: {e}")
 
     async def _remove_upnp_port_mapping(self, port: int):
-        """ÒÆ³ıUPnP¶Ë¿ÚÓ³Éä"""
+        """ç§»é™¤UPnPç«¯å£æ˜ å°„"""
         try:
             devices = upnpclient.discover()
             if devices:
@@ -2453,20 +2587,20 @@ class TCPExtensionStack:
                     NewExternalPort=port,
                     NewProtocol='TCP'
                 )
-                logger.info(f"ÒÑÒÆ³ıUPnP¶Ë¿ÚÓ³Éä: {port}")
+                logger.info(f"å·²ç§»é™¤UPnPç«¯å£æ˜ å°„: {port}")
         except Exception as e:
-            logger.warning(f"ÒÆ³ıUPnP¶Ë¿ÚÓ³ÉäÊ§°Ü: {e}")
+            logger.warning(f"ç§»é™¤UPnPç«¯å£æ˜ å°„å¤±è´¥: {e}")
 
     def _get_nearby_nodes(self, limit: int = 5) -> List[Dict[str, Any]]:
-        """»ñÈ¡¸½½üµÄ½ÚµãĞÅÏ¢"""
-        # °´×îºó seen Ê±¼äÅÅĞò£¬·µ»Ø×î½ü»î¶¯µÄ½Úµã
+        """è·å–é™„è¿‘çš„èŠ‚ç‚¹ä¿¡æ¯"""
+        # æŒ‰æœ€å seen æ—¶é—´æ’åºï¼Œè¿”å›æœ€è¿‘æ´»åŠ¨çš„èŠ‚ç‚¹
         sorted_nodes = sorted(
             self.node_list.items(),
             key=lambda x: x[1]['last_seen'],
             reverse=True
         )
     
-        # ¸ñÊ½»¯·µ»ØĞÅÏ¢£¬²»°üº¬Ãô¸ĞÊı¾İ
+        # æ ¼å¼åŒ–è¿”å›ä¿¡æ¯ï¼Œä¸åŒ…å«æ•æ„Ÿæ•°æ®
         return [
             {
                 'node_id': node_id,
@@ -2478,205 +2612,192 @@ class TCPExtensionStack:
         ]
     
     async def _handle_tcp_connection(self, reader, writer):
-        """´¦ÀíTCPÁ¬½Ó"""
+        """å¤„ç†TCPè¿æ¥"""
         try:
-            data = await reader.read(4096)  # ¶ÁÈ¡Êı¾İ
+            data = await reader.read(4096)  # è¯»å–æ•°æ®
             
-            # ¼ì²âÀ©Õ¹Ñ¡Ïî
+            # æ£€æµ‹æ‰©å±•é€‰é¡¹
             if self._detect_extension_options(data):
-                # ×÷ÎªÖĞ¼ä½Úµã´¦Àí×ª·¢
+                # ä½œä¸ºä¸­é—´èŠ‚ç‚¹å¤„ç†è½¬å‘
                 await self._handle_intermediate_forwarding(data, writer)
             else:
-                # ×÷Îª³ö¿Ú½Úµã´¦Àí
+                # ä½œä¸ºå‡ºå£èŠ‚ç‚¹å¤„ç†
                 await self._handle_exit_node_processing(data, writer)
                 
         except Exception as e:
-            logger.error(f"TCPÁ¬½Ó´¦ÀíÒì³£: {e}")
+            logger.error(f"TCPè¿æ¥å¤„ç†å¼‚å¸¸: {e}")
         finally:
             writer.close()
 
     def _detect_extension_options(self, data: bytes) -> bool:
-        """¼ì²âTCPÀ©Õ¹Ñ¡Ïî"""
-        # ËÑË÷Ä§Êı 0x53464D43 (SFMC)
+        """æ£€æµ‹TCPæ‰©å±•é€‰é¡¹"""
+        # æœç´¢é­”æ•° 0x53464D43 (SFMC)
         return b'\x53\x46\x4D\x43' in data
     
     async def _handle_intermediate_forwarding(self, data: bytes, writer):
-        """ÖĞ¼ä½Úµã×ª·¢Âß¼­"""
+        """ä¸­é—´èŠ‚ç‚¹è½¬å‘é€»è¾‘"""
         try:
-            # ²ÎÊı½âÂë
+            # å‚æ•°è§£ç 
             decoded_params = await self._decode_parameters(data)
             
-            # Â·ÓÉ¾ö²ß
+            # è·¯ç”±å†³ç­–
             next_hop = await self._select_next_hop(decoded_params)
             
             if next_hop:
-                # ¸üĞÂ²ÎÊı
+                # æ›´æ–°å‚æ•°
                 updated_params = await self._update_routing_parameters(decoded_params)
                 
-                # ÖØĞÂ»ìÏıºÍ·¢ËÍ
+                # é‡æ–°æ··æ·†å’Œå‘é€
                 await self._forward_to_next_hop(updated_params, next_hop, data)
             
         except Exception as e:
-            logger.error(f"ÖĞ¼ä½Úµã×ª·¢Ê§°Ü: {e}")
+            logger.error(f"ä¸­é—´èŠ‚ç‚¹è½¬å‘å¤±è´¥: {e}")
     
     async def _handle_exit_node_processing(self, data: bytes, writer):
-        """³ö¿Ú½Úµã´¦ÀíÂß¼­"""
+        """å‡ºå£èŠ‚ç‚¹å¤„ç†é€»è¾‘"""
         try:
-            # ×îÖÕÌøÑéÖ¤
+            # æœ€ç»ˆè·³éªŒè¯
             if not await self._validate_final_hop(data):
                 return
             
-            # Ğ­Òé°şÀë
+            # åè®®å‰¥ç¦»
             clean_data = await self._strip_protocol_extensions(data)
             
-            # ½¨Á¢Ä¿±êÁ¬½Ó
+            # å»ºç«‹ç›®æ ‡è¿æ¥
             response = await self._connect_to_target(clean_data)
             
-            # ·¢ËÍÏìÓ¦
+            # å‘é€å“åº”
             writer.write(response)
             await writer.drain()
             
         except Exception as e:
-            logger.error(f"³ö¿Ú½Úµã´¦ÀíÊ§°Ü: {e}")
+            logger.error(f"å‡ºå£èŠ‚ç‚¹å¤„ç†å¤±è´¥: {e}")
 
 class NodeDiscoveryService:
-    """½Úµã·¢ÏÖ·şÎñ"""
+    """èŠ‚ç‚¹å‘ç°æœåŠ¡"""
     
     def __init__(self, network: DistributedAnonymousNetwork):
         self.network = network
         self.is_running = False
     
     async def start(self):
-        """Æô¶¯½Úµã·¢ÏÖ·şÎñ"""
+        """å¯åŠ¨èŠ‚ç‚¹å‘ç°æœåŠ¡"""
         self.is_running = True
         asyncio.create_task(self._discovery_loop())
     
     async def stop(self):
-        """Í£Ö¹½Úµã·¢ÏÖ·şÎñ"""
+        """åœæ­¢èŠ‚ç‚¹å‘ç°æœåŠ¡"""
         self.is_running = False
     
     async def _discovery_loop(self):
-        """·¢ÏÖÑ­»·"""
+        """å‘ç°å¾ªç¯ - ä¸“æ³¨äºP2På‘ç°ï¼Œç§»é™¤DNSæ‰«æ"""
         while self.is_running:
             try:
-                # DNSÉ¨Ãè
-                await self._dns_scan()
-                
-                # P2P½ÚµãĞÅÏ¢½»»»
+                # ä¸“æ³¨äºP2PèŠ‚ç‚¹ä¿¡æ¯äº¤æ¢
                 await self._p2p_exchange()
                 
-                # µÈ´ıÏÂÒ»¸ö·¢ÏÖÖÜÆÚ
-                await asyncio.sleep(300)  # 5·ÖÖÓ
+                # ç­‰å¾…ä¸‹ä¸€ä¸ªå‘ç°å‘¨æœŸ
+                await asyncio.sleep(300)  # 5åˆ†é’Ÿ
                 
             except Exception as e:
-                logger.error(f"½Úµã·¢ÏÖÒì³£: {e}")
+                logger.error(f"èŠ‚ç‚¹å‘ç°å¼‚å¸¸: {e}")
                 await asyncio.sleep(60)
     
-    async def _dns_scan(self):
-        """DNSÉ¨Ãè"""
-        # Éú³É×ÓÓòÃûºòÑ¡ÁĞ±í
-        candidates = self._generate_subdomain_candidates()
-        
-        # ÅúÁ¿DNS²éÑ¯
-        for candidate in candidates:
-            domain = f"{candidate}.{self.network.config.scan_domain}"
-            try:
-                # ½âÎöÓòÃû
-                ip = socket.gethostbyname(domain)
-                
-                # ÑéÖ¤½Úµã»îÔ¾×´Ì¬
-                if await self._verify_node_active(ip):
-                    # Ìí¼Óµ½½ÚµãÁĞ±í
-                    self.network.node_list[domain] = {
-                        "host": ip,
-                        "port": random.randint(20000, 60000),
-                        "type": NodeType.D_NODE,  # ¼ÙÉè¶¼ÊÇD½Úµã
-                        "active": True,
-                        "last_seen": time.time()
-                    }
-                    
-            except socket.gaierror:
-                continue  # ÓòÃû²»´æÔÚ
-    
-    def _generate_subdomain_candidates(self) -> List[str]:
-        """Éú³É×ÓÓòÃûºòÑ¡ÁĞ±í"""
-        candidates = []
-        
-        # ³£ÓÃ´Ê»ã×éºÏ
-        common_words = ["node", "net", "anon", "proxy", "gateway", "relay"]
-        for word1 in common_words:
-            for word2 in common_words:
-                if word1 != word2:
-                    candidates.append(f"{word1}{word2}")
-        
-        # Ëæ»ú×Ö·ûĞòÁĞ
-        for _ in range(50):
-            candidates.append(self._generate_random_subdomain())
-        
-        return candidates
-    
-    def _generate_random_subdomain(self) -> str:
-        """Éú³ÉËæ»ú×ÓÓòÃû"""
-        base58_chars = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-        return ''.join(random.choices(base58_chars, k=8))
-    
-    async def _verify_node_active(self, ip: str) -> bool:
-        """ÑéÖ¤½Úµã»îÔ¾×´Ì¬"""
-        try:
-            # HTTPSÎÕÊÖ²âÊÔ
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"https://{ip}", timeout=5) as response:
-                    return response.status == 200
-        except:
-            return False
-    
     async def _p2p_exchange(self):
-        """P2P½ÚµãĞÅÏ¢½»»»"""
-        # ÓëÒÑÖª½Úµã½»»»²¿·ÖÁĞ±í
+        """P2PèŠ‚ç‚¹ä¿¡æ¯äº¤æ¢ - ä¸“æ³¨äºç›´æ¥èŠ‚ç‚¹å‘ç°"""
+        # ä¸å·²çŸ¥èŠ‚ç‚¹äº¤æ¢éƒ¨åˆ†åˆ—è¡¨
         known_nodes = list(self.network.node_list.values())
         if known_nodes:
-            # Ñ¡Ôñ¼¸¸ö½Úµã½øĞĞ½»»»
+            # é€‰æ‹©å‡ ä¸ªèŠ‚ç‚¹è¿›è¡Œäº¤æ¢
             exchange_nodes = random.sample(known_nodes, min(3, len(known_nodes)))
             
             for node in exchange_nodes:
                 if node.get("active"):
                     await self._exchange_node_list(node)
+    
+    async def _exchange_node_list(self, node: Dict[str, Any]):
+        """ä¸èŠ‚ç‚¹äº¤æ¢èŠ‚ç‚¹åˆ—è¡¨"""
+        try:
+            # å»ºç«‹è¿æ¥å¹¶äº¤æ¢èŠ‚ç‚¹ä¿¡æ¯
+            reader, writer = await asyncio.open_connection(
+                node["host"], node["port"]
+            )
+            
+            # å‘é€èŠ‚ç‚¹å‘ç°è¯·æ±‚
+            request = {
+                "type": "discover",
+                "sender_id": self.network.identity.node_id,
+                "known_nodes": list(self.network.node_list.keys())[:10]  # å‘é€éƒ¨åˆ†èŠ‚ç‚¹åˆ—è¡¨
+            }
+            
+            # å‘é€è¯·æ±‚å¹¶ç­‰å¾…å“åº”
+            writer.write(json.dumps(request).encode())
+            await writer.drain()
+            
+            # è¯»å–å“åº”
+            data = await reader.read(4096)
+            response = json.loads(data.decode())
+            
+            if response.get("type") == "discover_response":
+                # å¤„ç†è¿”å›çš„èŠ‚ç‚¹åˆ—è¡¨
+                await self._process_discovered_nodes(response.get("nodes", []))
+            
+            writer.close()
+            await writer.wait_closed()
+            
+        except Exception as e:
+            logger.debug(f"èŠ‚ç‚¹ä¿¡æ¯äº¤æ¢å¤±è´¥: {e}")
+    
+    async def _process_discovered_nodes(self, nodes: List[Dict[str, Any]]):
+        """å¤„ç†å‘ç°çš„èŠ‚ç‚¹"""
+        for node_info in nodes:
+            node_id = node_info.get("node_id")
+            if node_id and node_id not in self.network.node_list:
+                # æ·»åŠ åˆ°èŠ‚ç‚¹åˆ—è¡¨
+                self.network.node_list[node_id] = {
+                    "host": node_info["address"][0],
+                    "port": node_info["address"][1],
+                    "node_type": node_info.get("node_type"),
+                    "last_seen": time.time(),
+                    "active": True
+                }
+                logger.info(f"é€šè¿‡P2På‘ç°æ–°èŠ‚ç‚¹: {node_id}")
 
 class RoutingEngine:
-    """Â·ÓÉÒıÇæ"""
+    """è·¯ç”±å¼•æ“"""
     
     def __init__(self, network: DistributedAnonymousNetwork):
         self.network = network
         self.routing_table = {}
     
 async def calculate_route(self, target_info: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """¼ÆËã¶àÌøÂ·ÓÉÂ·¾¶£¬¿¼ÂÇÍøÂçÍØÆË¡¢½ÚµãĞÅÓşºÍÍøÂçĞÔÄÜ"""
+    """è®¡ç®—å¤šè·³è·¯ç”±è·¯å¾„ï¼Œè€ƒè™‘ç½‘ç»œæ‹“æ‰‘ã€èŠ‚ç‚¹ä¿¡èª‰å’Œç½‘ç»œæ€§èƒ½"""
     if not target_info or "node_id" not in target_info:
-        logger.error("Ä¿±ê½ÚµãĞÅÏ¢²»ÍêÕû£¬ÎŞ·¨¼ÆËãÂ·ÓÉ")
+        logger.error("ç›®æ ‡èŠ‚ç‚¹ä¿¡æ¯ä¸å®Œæ•´ï¼Œæ— æ³•è®¡ç®—è·¯ç”±")
         return []
 
     target_id = target_info["node_id"]
     
-    # 1. ¼ì²éÊÇ·ñÎªÖ±½ÓÁ¬½ÓµÄ½Úµã£¨0Ìø£©
+    # 1. æ£€æŸ¥æ˜¯å¦ä¸ºç›´æ¥è¿æ¥çš„èŠ‚ç‚¹ï¼ˆ0è·³ï¼‰
     if target_id in self.network.node_list:
         direct_node = self.network.node_list[target_id]
         if direct_node.get("active"):
             return [{
                 "path": [self.identity.node_id, target_id],
-                "score": 1.0,  # Ö±½ÓÁ¬½ÓµÃ·Ö×î¸ß
+                "score": 1.0,  # ç›´æ¥è¿æ¥å¾—åˆ†æœ€é«˜
                 "hops": 1,
                 "latency": direct_node.get("last_latency", 0),
                 "reputation": direct_node.get("reputation", 0),
                 "bandwidth": direct_node.get("bandwidth", 0)
             }]
 
-    # 2. ³õÊ¼»¯Â·ÓÉ·¢ÏÖ£¨»ùÓÚ¸Ä½øµÄDijkstraËã·¨£©
+    # 2. åˆå§‹åŒ–è·¯ç”±å‘ç°ï¼ˆåŸºäºæ”¹è¿›çš„Dijkstraç®—æ³•ï¼‰
     max_hops = self.config.performance_params.get("max_hops", 8)
     available_paths = []
     visited = set()
     queue = deque()
     
-    # ´ÓÖ±½ÓÁ¬½ÓµÄ»îÔ¾½Úµã¿ªÊ¼Ì½Ë÷£¨1Ìø£©
+    # ä»ç›´æ¥è¿æ¥çš„æ´»è·ƒèŠ‚ç‚¹å¼€å§‹æ¢ç´¢ï¼ˆ1è·³ï¼‰
     for neighbor_id, neighbor_info in self.network.node_list.items():
         if neighbor_info.get("active") and neighbor_id != self.identity.node_id:
             initial_score = self._calculate_path_score(neighbor_info, target_info)
@@ -2690,34 +2811,34 @@ async def calculate_route(self, target_info: Dict[str, Any]) -> List[Dict[str, A
             })
             visited.add(neighbor_id)
 
-    # 3. ¶àÌøÂ·ÓÉÌ½Ë÷
-    while queue and len(available_paths) < 5:  # ÏŞÖÆ×î´óºòÑ¡Â·¾¶ÊıÁ¿
+    # 3. å¤šè·³è·¯ç”±æ¢ç´¢
+    while queue and len(available_paths) < 5:  # é™åˆ¶æœ€å¤§å€™é€‰è·¯å¾„æ•°é‡
         current = queue.popleft()
         current_node_id = current["current_node"]
         current_hops = current["hops"]
 
-        # Èç¹û´ïµ½×î´óÌøÊı£¬Í£Ö¹Ì½Ë÷¸ÃÂ·¾¶
+        # å¦‚æœè¾¾åˆ°æœ€å¤§è·³æ•°ï¼Œåœæ­¢æ¢ç´¢è¯¥è·¯å¾„
         if current_hops >= max_hops:
             continue
 
-        # »ñÈ¡µ±Ç°½ÚµãµÄÁÚ¾ÓÁĞ±í£¨¿ÉÄÜĞèÒª´ÓÂ·ÓÉ±í»òÍøÂç²éÑ¯£©
+        # è·å–å½“å‰èŠ‚ç‚¹çš„é‚»å±…åˆ—è¡¨ï¼ˆå¯èƒ½éœ€è¦ä»è·¯ç”±è¡¨æˆ–ç½‘ç»œæŸ¥è¯¢ï¼‰
         current_neighbors = await self._get_node_neighbors(current_node_id)
         if not current_neighbors:
             continue
 
-        # Ì½Ë÷ÁÚ¾Ó½Úµã
+        # æ¢ç´¢é‚»å±…èŠ‚ç‚¹
         for neighbor_id, neighbor_info in current_neighbors.items():
-            # ±ÜÃâÑ­»·ºÍÖØ¸´½Úµã
+            # é¿å…å¾ªç¯å’Œé‡å¤èŠ‚ç‚¹
             if neighbor_id in current["path"] or neighbor_id in visited:
                 continue
 
-            # ¼ÆËãĞÂÂ·¾¶ÆÀ·Ö
+            # è®¡ç®—æ–°è·¯å¾„è¯„åˆ†
             new_path = current["path"] + [neighbor_id]
             new_hops = current_hops + 1
             new_latency = current["cumulative_latency"] + neighbor_info.get("last_latency", 0)
             new_reputation = (current["total_reputation"] + neighbor_info.get("reputation", 0)) / new_hops
             
-            # ¼ÆËãÂ·¾¶ÆÀ·Ö£¨×ÛºÏ¿¼ÂÇ¶àÒòËØ£©
+            # è®¡ç®—è·¯å¾„è¯„åˆ†ï¼ˆç»¼åˆè€ƒè™‘å¤šå› ç´ ï¼‰
             path_score = self._calculate_multi_hop_score(
                 neighbor_info, 
                 target_info, 
@@ -2726,7 +2847,7 @@ async def calculate_route(self, target_info: Dict[str, Any]) -> List[Dict[str, A
                 new_reputation
             )
 
-            # ¼ì²éÊÇ·ñµ½´ïÄ¿±ê½Úµã
+            # æ£€æŸ¥æ˜¯å¦åˆ°è¾¾ç›®æ ‡èŠ‚ç‚¹
             if neighbor_id == target_id:
                 available_paths.append({
                     "path": new_path,
@@ -2738,7 +2859,7 @@ async def calculate_route(self, target_info: Dict[str, Any]) -> List[Dict[str, A
                 })
                 continue
 
-            # Ìí¼Óµ½¶ÓÁĞ¼ÌĞøÌ½Ë÷
+            # æ·»åŠ åˆ°é˜Ÿåˆ—ç»§ç»­æ¢ç´¢
             queue.append({
                 "current_node": neighbor_id,
                 "path": new_path,
@@ -2749,11 +2870,11 @@ async def calculate_route(self, target_info: Dict[str, Any]) -> List[Dict[str, A
             })
             visited.add(neighbor_id)
 
-    # 4. ²¹³ä±¸ÓÃÂ·ÓÉ£¨Èç¹ûÖ±½ÓÂ·¾¶²»×ã£©
+    # 4. è¡¥å……å¤‡ç”¨è·¯ç”±ï¼ˆå¦‚æœç›´æ¥è·¯å¾„ä¸è¶³ï¼‰
     if not available_paths and self.network.node_list:
         available_paths = await self._generate_fallback_routes(target_info, max_hops)
 
-    # 5. °´ÆÀ·ÖÅÅĞò²¢¹ıÂËÖØ¸´Â·¾¶
+    # 5. æŒ‰è¯„åˆ†æ’åºå¹¶è¿‡æ»¤é‡å¤è·¯å¾„
     unique_paths = []
     seen_paths = set()
     for path in sorted(available_paths, key=lambda x: x["score"], reverse=True):
@@ -2762,12 +2883,12 @@ async def calculate_route(self, target_info: Dict[str, Any]) -> List[Dict[str, A
             seen_paths.add(path_str)
             unique_paths.append(path)
 
-    return unique_paths[:3]  # ·µ»ØÆÀ·Ö×î¸ßµÄ3ÌõÂ·¾¶
+    return unique_paths[:3]  # è¿”å›è¯„åˆ†æœ€é«˜çš„3æ¡è·¯å¾„
 
 def _calculate_multi_hop_score(self, node_info: Dict[str, Any], target_info: Dict[str, Any], 
                              hops: int, latency: float, reputation: float) -> float:
-    """¼ÆËã¶àÌøÂ·¾¶ÆÀ·Ö£¬×ÛºÏ¿¼ÂÇ¶àÖÖÒòËØ"""
-    # »ù´¡È¨ÖØÅäÖÃ£¨¿É´ÓÅäÖÃÖĞ¼ÓÔØ£©
+    """è®¡ç®—å¤šè·³è·¯å¾„è¯„åˆ†ï¼Œç»¼åˆè€ƒè™‘å¤šç§å› ç´ """
+    # åŸºç¡€æƒé‡é…ç½®ï¼ˆå¯ä»é…ç½®ä¸­åŠ è½½ï¼‰
     weights = self.config.performance_params.get("routing_weights", {
         "reputation": 0.4,
         "latency": 0.25,
@@ -2776,57 +2897,57 @@ def _calculate_multi_hop_score(self, node_info: Dict[str, Any], target_info: Dic
         "stability": 0.05
     })
 
-    # 1. ĞÅÓşÆÀ·Ö£¨0-1£©
-    rep_score = min(max(reputation / 1000, 0), 1)  # ¼ÙÉè×î´óĞÅÓşÎª1000
+    # 1. ä¿¡èª‰è¯„åˆ†ï¼ˆ0-1ï¼‰
+    rep_score = min(max(reputation / 1000, 0), 1)  # å‡è®¾æœ€å¤§ä¿¡èª‰ä¸º1000
 
-    # 2. ÑÓ³ÙÆÀ·Ö£¨0-1£¬ÑÓ³ÙÔ½µÍµÃ·ÖÔ½¸ß£©
-    max_acceptable_latency = 5000  # 5Ãë×÷Îª×î´ó¿É½ÓÊÜÑÓ³Ù
+    # 2. å»¶è¿Ÿè¯„åˆ†ï¼ˆ0-1ï¼Œå»¶è¿Ÿè¶Šä½å¾—åˆ†è¶Šé«˜ï¼‰
+    max_acceptable_latency = 5000  # 5ç§’ä½œä¸ºæœ€å¤§å¯æ¥å—å»¶è¿Ÿ
     latency_score = 1 - min(latency / max_acceptable_latency, 1)
 
-    # 3. ´ø¿íÆÀ·Ö£¨0-1£©
+    # 3. å¸¦å®½è¯„åˆ†ï¼ˆ0-1ï¼‰
     bandwidth = node_info.get("bandwidth", 0)
-    max_bandwidth = 100  # 100Mbps×÷Îª²Î¿¼×î´óÖµ
+    max_bandwidth = 100  # 100Mbpsä½œä¸ºå‚è€ƒæœ€å¤§å€¼
     bandwidth_score = min(bandwidth / max_bandwidth, 1)
 
-    # 4. ÌøÊıÆÀ·Ö£¨0-1£¬ÌøÊıÔ½ÉÙµÃ·ÖÔ½¸ß£©
+    # 4. è·³æ•°è¯„åˆ†ï¼ˆ0-1ï¼Œè·³æ•°è¶Šå°‘å¾—åˆ†è¶Šé«˜ï¼‰
     max_hops = self.config.performance_params.get("max_hops", 8)
     hops_score = 1 - (hops / max_hops)
 
-    # 5. ÎÈ¶¨ĞÔÆÀ·Ö£¨0-1£©
+    # 5. ç¨³å®šæ€§è¯„åˆ†ï¼ˆ0-1ï¼‰
     uptime = node_info.get("uptime_ratio", 0)
     stability_score = min(uptime, 1)
 
-    # 6. Ä¿±êÏàËÆ¶ÈÆÀ·Ö£¨0-1£¬»ùÓÚ½ÚµãÀàĞÍºÍµØÀíÎ»ÖÃ£©
+    # 6. ç›®æ ‡ç›¸ä¼¼åº¦è¯„åˆ†ï¼ˆ0-1ï¼ŒåŸºäºèŠ‚ç‚¹ç±»å‹å’Œåœ°ç†ä½ç½®ï¼‰
     similarity_score = self._calculate_similarity_score(node_info, target_info)
 
-    # ×ÛºÏÆÀ·Ö£¨¼ÓÈ¨ÇóºÍ£©
+    # ç»¼åˆè¯„åˆ†ï¼ˆåŠ æƒæ±‚å’Œï¼‰
     total_score = (
         rep_score * weights["reputation"] +
         latency_score * weights["latency"] +
         bandwidth_score * weights["bandwidth"] +
         hops_score * weights["hops"] +
         stability_score * weights["stability"] +
-        similarity_score * 0.1  # ¶îÍâÔö¼ÓÏàËÆ¶ÈÈ¨ÖØ
+        similarity_score * 0.1  # é¢å¤–å¢åŠ ç›¸ä¼¼åº¦æƒé‡
     )
 
     return round(total_score, 4)
 
 def _calculate_similarity_score(self, node_info: Dict[str, Any], target_info: Dict[str, Any]) -> float:
-    """¼ÆËã½ÚµãÓëÄ¿±êµÄÏàËÆ¶ÈÆÀ·Ö£¨»ùÓÚÀàĞÍ¡¢µØÀíÎ»ÖÃµÈ£©"""
+    """è®¡ç®—èŠ‚ç‚¹ä¸ç›®æ ‡çš„ç›¸ä¼¼åº¦è¯„åˆ†ï¼ˆåŸºäºç±»å‹ã€åœ°ç†ä½ç½®ç­‰ï¼‰"""
     score = 0.0
 
-    # ½ÚµãÀàĞÍÏàËÆ¶È
+    # èŠ‚ç‚¹ç±»å‹ç›¸ä¼¼åº¦
     if node_info.get("node_type") == target_info.get("node_type"):
         score += 0.3
 
-    # µØÀíÎ»ÖÃÏàËÆ¶È£¨¼ÙÉè´æÔÚregionĞÅÏ¢£©
+    # åœ°ç†ä½ç½®ç›¸ä¼¼åº¦ï¼ˆå‡è®¾å­˜åœ¨regionä¿¡æ¯ï¼‰
     if node_info.get("region") and target_info.get("region"):
         if node_info["region"] == target_info["region"]:
             score += 0.3
         elif node_info.get("country") == target_info.get("country"):
             score += 0.15
 
-    # ÄÜÁ¦ÏàËÆ¶È£¨Ö§³ÖµÄ·şÎñÀàĞÍ£©
+    # èƒ½åŠ›ç›¸ä¼¼åº¦ï¼ˆæ”¯æŒçš„æœåŠ¡ç±»å‹ï¼‰
     node_capabilities = set(node_info.get("capabilities", {}).keys())
     target_capabilities = set(target_info.get("required_capabilities", []))
     if target_capabilities:
@@ -2836,26 +2957,26 @@ def _calculate_similarity_score(self, node_info: Dict[str, Any], target_info: Di
     return min(score, 1.0)
 
 async def _get_node_neighbors(self, node_id: str) -> Dict[str, Any]:
-    """»ñÈ¡Ö¸¶¨½ÚµãµÄÁÚ¾ÓÁĞ±í£¨¿ÉÄÜĞèÒªÍøÂç²éÑ¯£©"""
-    # 1. ÏÈ¼ì²é±¾µØ»º´æ
+    """è·å–æŒ‡å®šèŠ‚ç‚¹çš„é‚»å±…åˆ—è¡¨ï¼ˆå¯èƒ½éœ€è¦ç½‘ç»œæŸ¥è¯¢ï¼‰"""
+    # 1. å…ˆæ£€æŸ¥æœ¬åœ°ç¼“å­˜
     if node_id in self.routing_table:
         cached_neighbors = self.routing_table[node_id].get("neighbors", {})
         if cached_neighbors and time.time() - self.routing_table[node_id].get("last_updated", 0) < 300:
             return cached_neighbors
 
-    # 2. ±¾µØ»º´æÊ§Ğ§£¬Ïò½Úµã·¢ËÍ²éÑ¯ÇëÇó
+    # 2. æœ¬åœ°ç¼“å­˜å¤±æ•ˆï¼Œå‘èŠ‚ç‚¹å‘é€æŸ¥è¯¢è¯·æ±‚
     try:
         node_info = self.network.node_list.get(node_id)
         if not node_info or not node_info.get("active"):
             return {}
 
-        # ·¢ËÍÁÚ¾Ó²éÑ¯ÏûÏ¢
+        # å‘é€é‚»å±…æŸ¥è¯¢æ¶ˆæ¯
         reader, writer = await asyncio.open_connection(
             node_info["address"][0], 
             node_info["address"][1]
         )
         
-        # ¹¹½¨²éÑ¯ÏûÏ¢
+        # æ„å»ºæŸ¥è¯¢æ¶ˆæ¯
         query = {
             "type": "neighbor_query",
             "source": self.identity.node_id,
@@ -2863,12 +2984,12 @@ async def _get_node_neighbors(self, node_id: str) -> Dict[str, Any]:
             "timestamp": time.time()
         }
         
-        # ·¢ËÍ²¢µÈ´ıÏìÓ¦
+        # å‘é€å¹¶ç­‰å¾…å“åº”
         data = json.dumps(query).encode()
         writer.write(struct.pack(">I", len(data)) + data)
         await writer.drain()
 
-        # ¶ÁÈ¡ÏìÓ¦
+        # è¯»å–å“åº”
         length_data = await reader.readexactly(4)
         response_length = struct.unpack(">I", length_data)[0]
         response_data = await reader.readexactly(response_length)
@@ -2877,7 +2998,7 @@ async def _get_node_neighbors(self, node_id: str) -> Dict[str, Any]:
         writer.close()
         await writer.wait_closed()
 
-        # ¸üĞÂ±¾µØ»º´æ
+        # æ›´æ–°æœ¬åœ°ç¼“å­˜
         if "neighbors" in response:
             self.routing_table[node_id] = {
                 "neighbors": response["neighbors"],
@@ -2886,33 +3007,33 @@ async def _get_node_neighbors(self, node_id: str) -> Dict[str, Any]:
             return response["neighbors"]
 
     except Exception as e:
-        logger.error(f"»ñÈ¡½Úµã {node_id} ÁÚ¾ÓÁĞ±íÊ§°Ü: {e}")
+        logger.error(f"è·å–èŠ‚ç‚¹ {node_id} é‚»å±…åˆ—è¡¨å¤±è´¥: {e}")
 
     return {}
 
 async def _generate_fallback_routes(self, target_info: Dict[str, Any], max_hops: int) -> List[Dict[str, Any]]:
-    """Éú³É±¸ÓÃÂ·ÓÉ£¨µ±Ö±½ÓÂ·ÓÉ·¢ÏÖÊ§°ÜÊ±£©"""
+    """ç”Ÿæˆå¤‡ç”¨è·¯ç”±ï¼ˆå½“ç›´æ¥è·¯ç”±å‘ç°å¤±è´¥æ—¶ï¼‰"""
     fallback_routes = []
     target_id = target_info["node_id"]
     
-    # 1. »ùÓÚ½ÚµãĞÅÓşËæ»úÑ¡ÔñÂ·¾¶
+    # 1. åŸºäºèŠ‚ç‚¹ä¿¡èª‰éšæœºé€‰æ‹©è·¯å¾„
     reputable_nodes = [
         (nid, ninfo) for nid, ninfo in self.network.node_list.items()
         if ninfo.get("active") and ninfo.get("reputation", 0) > 800
     ]
     
     if len(reputable_nodes) >= max_hops:
-        # Ëæ»úÑ¡Ôñ½Úµã×é³ÉÂ·¾¶
+        # éšæœºé€‰æ‹©èŠ‚ç‚¹ç»„æˆè·¯å¾„
         path_nodes = random.sample(reputable_nodes, max_hops-1)
         path = [self.identity.node_id] + [nid for nid, _ in path_nodes] + [target_id]
         
-        # ¼ÆËãÂ·¾¶ÆÀ·Ö
+        # è®¡ç®—è·¯å¾„è¯„åˆ†
         avg_reputation = sum(ninfo.get("reputation", 0) for _, ninfo in path_nodes) / len(path_nodes)
         fallback_routes.append({
             "path": path,
-            "score": 0.5 + (avg_reputation / 2000),  # »ù´¡·Ö+ĞÅÓş¼Ó³É
+            "score": 0.5 + (avg_reputation / 2000),  # åŸºç¡€åˆ†+ä¿¡èª‰åŠ æˆ
             "hops": len(path) - 1,
-            "latency": 0,  # Î´ÖªÑÓ³Ù
+            "latency": 0,  # æœªçŸ¥å»¶è¿Ÿ
             "reputation": avg_reputation,
             "bandwidth": 0
         })
@@ -2920,7 +3041,7 @@ async def _generate_fallback_routes(self, target_info: Dict[str, Any], max_hops:
     return fallback_routes
     
     def _calculate_path_score(self, node_info: Dict[str, Any], target_info: Dict[str, Any]) -> float:
-        """¼ÆËãÂ·¾¶ÆÀ·Ö"""
+        """è®¡ç®—è·¯å¾„è¯„åˆ†"""
         reputation = node_info.get("reputation", 500) / 1000.0
         latency = max(0, 1 - (node_info.get("latency", 100) / 1000.0))
         bandwidth = min(1.0, node_info.get("bandwidth", 10) / 100.0)
@@ -2941,23 +3062,23 @@ async def _generate_fallback_routes(self, target_info: Dict[str, Any], max_hops:
         )
 
 class UPNPManager:
-    """UPnP¹ÜÀíÆ÷"""
+    """UPnPç®¡ç†å™¨"""
     
     def __init__(self, network: DistributedAnonymousNetwork):
         self.network = network
         self.devices = []
     
     async def discover_devices(self):
-        """·¢ÏÖUPnPÉè±¸"""
+        """å‘ç°UPnPè®¾å¤‡"""
         try:
             self.devices = upnpclient.discover()
             return len(self.devices) > 0
         except Exception as e:
-            logger.warning(f"UPnPÉè±¸·¢ÏÖÊ§°Ü: {e}")
+            logger.warning(f"UPnPè®¾å¤‡å‘ç°å¤±è´¥: {e}")
             return False
     
     async def setup_port_mapping(self, internal_port: int, external_port: int = None) -> bool:
-        """ÉèÖÃ¶Ë¿ÚÓ³Éä"""
+        """è®¾ç½®ç«¯å£æ˜ å°„"""
         if not self.devices:
             if not await self.discover_devices():
                 return False
@@ -2979,283 +3100,283 @@ class UPNPManager:
             )
             return True
         except Exception as e:
-            logger.error(f"UPnP¶Ë¿ÚÓ³ÉäÉèÖÃÊ§°Ü: {e}")
+            logger.error(f"UPnPç«¯å£æ˜ å°„è®¾ç½®å¤±è´¥: {e}")
             return False
 
 class AdaptiveOptimizer:
-    """×ÔÊÊÓ¦ĞÔÄÜÓÅ»¯Æ÷£¬»ùÓÚÍøÂçÊµÊ±×´Ì¬¶¯Ì¬µ÷ÕûÏµÍ³²ÎÊı"""
+    """è‡ªé€‚åº”æ€§èƒ½ä¼˜åŒ–å™¨ï¼ŒåŸºäºç½‘ç»œå®æ—¶çŠ¶æ€åŠ¨æ€è°ƒæ•´ç³»ç»Ÿå‚æ•°"""
     
     def __init__(self, network: DistributedAnonymousNetwork):
         self.network = network
-        self.optimization_history = deque(maxlen=100)  # ±£´æ×î½ü100´ÎÓÅ»¯¼ÇÂ¼
+        self.optimization_history = deque(maxlen=100)  # ä¿å­˜æœ€è¿‘100æ¬¡ä¼˜åŒ–è®°å½•
         self.last_optimization = 0
-        self.optimization_interval = 30  # ÓÅ»¯¼ì²é¼ä¸ô£¨Ãë£©
+        self.optimization_interval = 30  # ä¼˜åŒ–æ£€æŸ¥é—´éš”ï¼ˆç§’ï¼‰
         self.thresholds = {
             "latency": {
-                "high": 500,    # ¸ßÑÓ³ÙãĞÖµ£¨ms£©
-                "medium": 200,  # ÖĞµÈÑÓ³ÙãĞÖµ£¨ms£©
-                "low": 100      # µÍÑÓ³ÙãĞÖµ£¨ms£©
+                "high": 500,    # é«˜å»¶è¿Ÿé˜ˆå€¼ï¼ˆmsï¼‰
+                "medium": 200,  # ä¸­ç­‰å»¶è¿Ÿé˜ˆå€¼ï¼ˆmsï¼‰
+                "low": 100      # ä½å»¶è¿Ÿé˜ˆå€¼ï¼ˆmsï¼‰
             },
             "packet_loss": {
-                "high": 0.2,    # ¸ß¶ª°üÂÊãĞÖµ
-                "medium": 0.1,  # ÖĞµÈ¶ª°üÂÊãĞÖµ
-                "low": 0.05     # µÍ¶ª°üÂÊãĞÖµ
+                "high": 0.2,    # é«˜ä¸¢åŒ…ç‡é˜ˆå€¼
+                "medium": 0.1,  # ä¸­ç­‰ä¸¢åŒ…ç‡é˜ˆå€¼
+                "low": 0.05     # ä½ä¸¢åŒ…ç‡é˜ˆå€¼
             },
             "error_rate": {
-                "high": 0.1,    # ¸ß´íÎóÂÊãĞÖµ
-                "medium": 0.05, # ÖĞµÈ´íÎóÂÊãĞÖµ
-                "low": 0.02     # µÍ´íÎóÂÊãĞÖµ
+                "high": 0.1,    # é«˜é”™è¯¯ç‡é˜ˆå€¼
+                "medium": 0.05, # ä¸­ç­‰é”™è¯¯ç‡é˜ˆå€¼
+                "low": 0.02     # ä½é”™è¯¯ç‡é˜ˆå€¼
             }
         }
 
     async def start_optimization_loop(self):
-        """Æô¶¯³ÖĞøÓÅ»¯Ñ­»·"""
+        """å¯åŠ¨æŒç»­ä¼˜åŒ–å¾ªç¯"""
         while self.network.is_running:
             try:
                 await self.optimize_performance()
                 await asyncio.sleep(self.optimization_interval)
             except Exception as e:
-                logger.error(f"ĞÔÄÜÓÅ»¯Ñ­»·³ö´í: {e}")
-                await asyncio.sleep(10)  # ³ö´íÊ±Ëõ¶Ì¼ä¸ôÖØÊÔ
+                logger.error(f"æ€§èƒ½ä¼˜åŒ–å¾ªç¯å‡ºé”™: {e}")
+                await asyncio.sleep(10)  # å‡ºé”™æ—¶ç¼©çŸ­é—´éš”é‡è¯•
 
     async def optimize_performance(self):
-        """»ùÓÚÊµÊ±ÍøÂç×´Ì¬½øĞĞ¶àÎ¬¶ÈĞÔÄÜÓÅ»¯"""
+        """åŸºäºå®æ—¶ç½‘ç»œçŠ¶æ€è¿›è¡Œå¤šç»´åº¦æ€§èƒ½ä¼˜åŒ–"""
         current_time = time.time()
         if current_time - self.last_optimization < self.optimization_interval:
-            return  # Î´µ½ÓÅ»¯Ê±¼ä¼ä¸ô
+            return  # æœªåˆ°ä¼˜åŒ–æ—¶é—´é—´éš”
         
-        # »ñÈ¡×îĞÂĞÔÄÜÍ³¼ÆÊı¾İ
+        # è·å–æœ€æ–°æ€§èƒ½ç»Ÿè®¡æ•°æ®
         stats = self.network.performance_monitor.get_performance_stats()
         if not stats:
-            logger.warning("ÎŞĞÔÄÜÊı¾İ£¬ÎŞ·¨½øĞĞÓÅ»¯")
+            logger.warning("æ— æ€§èƒ½æ•°æ®ï¼Œæ— æ³•è¿›è¡Œä¼˜åŒ–")
             return
 
         optimization_actions = []
         
-        # 1. Â·ÓÉ²ßÂÔÓÅ»¯
+        # 1. è·¯ç”±ç­–ç•¥ä¼˜åŒ–
         route_optimizations = await self._optimize_routing_strategy(stats)
         optimization_actions.extend(route_optimizations)
         
-        # 2. ·ÖÆ¬²ßÂÔÓÅ»¯
+        # 2. åˆ†ç‰‡ç­–ç•¥ä¼˜åŒ–
         fragment_optimizations = self._optimize_fragmentation_strategy(stats)
         optimization_actions.extend(fragment_optimizations)
         
-        # 3. Á¬½Ó¹ÜÀíÓÅ»¯
+        # 3. è¿æ¥ç®¡ç†ä¼˜åŒ–
         connection_optimizations = await self._optimize_connection_management(stats)
         optimization_actions.extend(connection_optimizations)
         
-        # 4. ¼ÓÃÜ¼¶±ğ¶¯Ì¬µ÷Õû
+        # 4. åŠ å¯†çº§åˆ«åŠ¨æ€è°ƒæ•´
         crypto_optimizations = self._optimize_crypto_strategy(stats)
         optimization_actions.extend(crypto_optimizations)
         
-        # ¼ÇÂ¼ÓÅ»¯ÀúÊ·
+        # è®°å½•ä¼˜åŒ–å†å²
         if optimization_actions:
             self.optimization_history.append({
                 "timestamp": current_time,
                 "stats": {k: v for k, v in stats.items() if k in ["avg_latency", "packet_loss", "error_rate"]},
                 "actions": optimization_actions
             })
-            logger.info(f"Ö´ĞĞÁË{len(optimization_actions)}ÏîĞÔÄÜÓÅ»¯")
+            logger.info(f"æ‰§è¡Œäº†{len(optimization_actions)}é¡¹æ€§èƒ½ä¼˜åŒ–")
         
         self.last_optimization = current_time
 
     async def _optimize_routing_strategy(self, stats: Dict[str, Any]) -> List[str]:
-        """ÓÅ»¯Â·ÓÉ²ßÂÔ"""
+        """ä¼˜åŒ–è·¯ç”±ç­–ç•¥"""
         actions = []
         current_algorithm = self.network.config.performance_params.get("routing.algorithm", "adaptive")
         current_max_hops = self.network.config.performance_params.get("max_hops", 8)
         
-        # ¸ù¾İÑÓ³Ùµ÷Õû×î´óÌøÊı
+        # æ ¹æ®å»¶è¿Ÿè°ƒæ•´æœ€å¤§è·³æ•°
         if stats["avg_latency"] > self.thresholds["latency"]["high"]:
-            # ¸ßÑÓ³ÙÍøÂç£¬¼õÉÙÌøÊı
+            # é«˜å»¶è¿Ÿç½‘ç»œï¼Œå‡å°‘è·³æ•°
             new_max_hops = max(2, current_max_hops - 2)
             if new_max_hops != current_max_hops:
                 self.network.config.performance_params["max_hops"] = new_max_hops
-                actions.append(f"¸ßÑÓ³ÙÍøÂç£¬½«×î´óÌøÊı´Ó{current_max_hops}µ÷ÕûÎª{new_max_hops}")
+                actions.append(f"é«˜å»¶è¿Ÿç½‘ç»œï¼Œå°†æœ€å¤§è·³æ•°ä»{current_max_hops}è°ƒæ•´ä¸º{new_max_hops}")
         
         elif stats["avg_latency"] < self.thresholds["latency"]["low"]:
-            # µÍÑÓ³ÙÍøÂç£¬¿ÉÔö¼ÓÌøÊıÒÔÌá¸ßÄäÃûĞÔ
+            # ä½å»¶è¿Ÿç½‘ç»œï¼Œå¯å¢åŠ è·³æ•°ä»¥æé«˜åŒ¿åæ€§
             new_max_hops = min(10, current_max_hops + 1)
             if new_max_hops != current_max_hops:
                 self.network.config.performance_params["max_hops"] = new_max_hops
-                actions.append(f"µÍÑÓ³ÙÍøÂç£¬½«×î´óÌøÊı´Ó{current_max_hops}µ÷ÕûÎª{new_max_hops}")
+                actions.append(f"ä½å»¶è¿Ÿç½‘ç»œï¼Œå°†æœ€å¤§è·³æ•°ä»{current_max_hops}è°ƒæ•´ä¸º{new_max_hops}")
         
-        # ¸ù¾İ¶ª°üÂÊµ÷ÕûÂ·ÓÉËã·¨
+        # æ ¹æ®ä¸¢åŒ…ç‡è°ƒæ•´è·¯ç”±ç®—æ³•
         if stats["packet_loss"] > self.thresholds["packet_loss"]["high"]:
-            # ¸ß¶ª°üÂÊ£¬ÇĞ»»µ½¸üÎÈ½¡µÄÂ·ÓÉËã·¨
+            # é«˜ä¸¢åŒ…ç‡ï¼Œåˆ‡æ¢åˆ°æ›´ç¨³å¥çš„è·¯ç”±ç®—æ³•
             if current_algorithm != "robust":
                 self.network.config.performance_params["routing.algorithm"] = "robust"
-                actions.append(f"¸ß¶ª°üÂÊ£¬Â·ÓÉËã·¨´Ó{current_algorithm}ÇĞ»»Îªrobust")
-                # Á¢¼´¸üĞÂÂ·ÓÉ±í
+                actions.append(f"é«˜ä¸¢åŒ…ç‡ï¼Œè·¯ç”±ç®—æ³•ä»{current_algorithm}åˆ‡æ¢ä¸ºrobust")
+                # ç«‹å³æ›´æ–°è·¯ç”±è¡¨
                 await self.network.update_routing_table()
         
         elif stats["packet_loss"] < self.thresholds["packet_loss"]["low"] and current_algorithm != "fast":
-            # µÍ¶ª°üÂÊ£¬ÇĞ»»µ½¸ü¿ìµÄÂ·ÓÉËã·¨
+            # ä½ä¸¢åŒ…ç‡ï¼Œåˆ‡æ¢åˆ°æ›´å¿«çš„è·¯ç”±ç®—æ³•
             self.network.config.performance_params["routing.algorithm"] = "fast"
-            actions.append(f"µÍ¶ª°üÂÊ£¬Â·ÓÉËã·¨´Ó{current_algorithm}ÇĞ»»Îªfast")
+            actions.append(f"ä½ä¸¢åŒ…ç‡ï¼Œè·¯ç”±ç®—æ³•ä»{current_algorithm}åˆ‡æ¢ä¸ºfast")
         
-        # ¶¯Ì¬µ÷ÕûÂ·ÓÉÈ¨ÖØ
+        # åŠ¨æ€è°ƒæ•´è·¯ç”±æƒé‡
         if stats["error_rate"] > self.thresholds["error_rate"]["high"]:
-            # ¸ß´íÎóÂÊ£¬Ôö¼Ó½ÚµãĞÅÓşÈ¨ÖØ
+            # é«˜é”™è¯¯ç‡ï¼Œå¢åŠ èŠ‚ç‚¹ä¿¡èª‰æƒé‡
             self.network.config.performance_params["routing.weights.reputation"] = 0.6
             self.network.config.performance_params["routing.weights.latency"] = 0.2
-            actions.append("¸ß´íÎóÂÊ£¬Ôö¼Ó½ÚµãĞÅÓşÈ¨ÖØÖÁ0.6")
+            actions.append("é«˜é”™è¯¯ç‡ï¼Œå¢åŠ èŠ‚ç‚¹ä¿¡èª‰æƒé‡è‡³0.6")
         
         return actions
 
     def _optimize_fragmentation_strategy(self, stats: Dict[str, Any]) -> List[str]:
-        """ÓÅ»¯Êı¾İ·ÖÆ¬²ßÂÔ"""
+        """ä¼˜åŒ–æ•°æ®åˆ†ç‰‡ç­–ç•¥"""
         actions = []
         frag_config = self.network.config.performance_params.get("fragmentation", {})
         current_min_size = frag_config.get("min_fragment_size", 512)
         current_max_size = frag_config.get("max_fragment_size", 16384)
         current_redundancy = frag_config.get("redundancy_factor", 1.5)
         
-        # ¸ù¾İÍøÂç×´¿öµ÷Õû·ÖÆ¬´óĞ¡
+        # æ ¹æ®ç½‘ç»œçŠ¶å†µè°ƒæ•´åˆ†ç‰‡å¤§å°
         if stats["avg_latency"] > self.thresholds["latency"]["high"] or stats["packet_loss"] > self.thresholds["packet_loss"]["high"]:
-            # ÍøÂç×´¿ö²î£¬Ê¹ÓÃ¸üĞ¡µÄ·ÖÆ¬
+            # ç½‘ç»œçŠ¶å†µå·®ï¼Œä½¿ç”¨æ›´å°çš„åˆ†ç‰‡
             new_max_size = max(1024, current_max_size // 2)
             if new_max_size != current_max_size:
                 frag_config["max_fragment_size"] = new_max_size
-                actions.append(f"ÍøÂç×´¿ö²î£¬×î´ó·ÖÆ¬´óĞ¡´Ó{current_max_size}µ÷ÕûÎª{new_max_size}")
+                actions.append(f"ç½‘ç»œçŠ¶å†µå·®ï¼Œæœ€å¤§åˆ†ç‰‡å¤§å°ä»{current_max_size}è°ƒæ•´ä¸º{new_max_size}")
                 
-                # Ôö¼ÓÈßÓà
+                # å¢åŠ å†—ä½™
                 new_redundancy = min(3.0, current_redundancy + 0.5)
                 if new_redundancy != current_redundancy:
                     frag_config["redundancy_factor"] = new_redundancy
-                    actions.append(f"Ôö¼ÓÊı¾İÈßÓà£¬´Ó{current_redundancy}µ÷ÕûÎª{new_redundancy}")
+                    actions.append(f"å¢åŠ æ•°æ®å†—ä½™ï¼Œä»{current_redundancy}è°ƒæ•´ä¸º{new_redundancy}")
         
         elif stats["avg_latency"] < self.thresholds["latency"]["low"] and stats["packet_loss"] < self.thresholds["packet_loss"]["low"]:
-            # ÍøÂç×´¿öºÃ£¬Ê¹ÓÃ¸ü´óµÄ·ÖÆ¬
+            # ç½‘ç»œçŠ¶å†µå¥½ï¼Œä½¿ç”¨æ›´å¤§çš„åˆ†ç‰‡
             new_max_size = min(32768, current_max_size * 2)
             if new_max_size != current_max_size:
                 frag_config["max_fragment_size"] = new_max_size
-                actions.append(f"ÍøÂç×´¿öºÃ£¬×î´ó·ÖÆ¬´óĞ¡´Ó{current_max_size}µ÷ÕûÎª{new_max_size}")
+                actions.append(f"ç½‘ç»œçŠ¶å†µå¥½ï¼Œæœ€å¤§åˆ†ç‰‡å¤§å°ä»{current_max_size}è°ƒæ•´ä¸º{new_max_size}")
                 
-                # ¼õÉÙÈßÓà
+                # å‡å°‘å†—ä½™
                 new_redundancy = max(1.0, current_redundancy - 0.3)
                 if new_redundancy != current_redundancy:
                     frag_config["redundancy_factor"] = new_redundancy
-                    actions.append(f"¼õÉÙÊı¾İÈßÓà£¬´Ó{current_redundancy}µ÷ÕûÎª{new_redundancy}")
+                    actions.append(f"å‡å°‘æ•°æ®å†—ä½™ï¼Œä»{current_redundancy}è°ƒæ•´ä¸º{new_redundancy}")
         
-        # ¸ù¾İ´íÎóÂÊµ÷Õû·ÖÆ¬ÓÅÏÈ¼¶²ßÂÔ
+        # æ ¹æ®é”™è¯¯ç‡è°ƒæ•´åˆ†ç‰‡ä¼˜å…ˆçº§ç­–ç•¥
         if stats["error_rate"] > self.thresholds["error_rate"]["high"]:
             frag_config["default_strategy"] = "reliable"
-            actions.append("¸ß´íÎóÂÊ£¬·ÖÆ¬²ßÂÔÇĞ»»ÎªreliableÄ£Ê½")
+            actions.append("é«˜é”™è¯¯ç‡ï¼Œåˆ†ç‰‡ç­–ç•¥åˆ‡æ¢ä¸ºreliableæ¨¡å¼")
         elif stats["error_rate"] < self.thresholds["error_rate"]["low"]:
             frag_config["default_strategy"] = "fast"
-            actions.append("µÍ´íÎóÂÊ£¬·ÖÆ¬²ßÂÔÇĞ»»ÎªfastÄ£Ê½")
+            actions.append("ä½é”™è¯¯ç‡ï¼Œåˆ†ç‰‡ç­–ç•¥åˆ‡æ¢ä¸ºfastæ¨¡å¼")
         
         self.network.config.performance_params["fragmentation"] = frag_config
         return actions
 
     async def _optimize_connection_management(self, stats: Dict[str, Any]) -> List[str]:
-        """ÓÅ»¯Á¬½Ó¹ÜÀí²ßÂÔ"""
+        """ä¼˜åŒ–è¿æ¥ç®¡ç†ç­–ç•¥"""
         actions = []
         current_max_connections = self.network.config.performance_params.get("max_connections", 1000)
         
-        # ¸ù¾İ½Úµã¸ºÔØµ÷Õû×î´óÁ¬½ÓÊı
-        node_load = stats.get("node_load", 0.5)  # 0-1Ö®¼äµÄ¸ºÔØÖµ
-        if node_load > 0.8:  # ¸ß¸ºÔØ
+        # æ ¹æ®èŠ‚ç‚¹è´Ÿè½½è°ƒæ•´æœ€å¤§è¿æ¥æ•°
+        node_load = stats.get("node_load", 0.5)  # 0-1ä¹‹é—´çš„è´Ÿè½½å€¼
+        if node_load > 0.8:  # é«˜è´Ÿè½½
             new_max = max(500, int(current_max_connections * 0.8))
             if new_max != current_max_connections:
                 self.network.config.performance_params["max_connections"] = new_max
-                actions.append(f"½Úµã¸ß¸ºÔØ£¬×î´óÁ¬½ÓÊı´Ó{current_max_connections}µ÷ÕûÎª{new_max}")
+                actions.append(f"èŠ‚ç‚¹é«˜è´Ÿè½½ï¼Œæœ€å¤§è¿æ¥æ•°ä»{current_max_connections}è°ƒæ•´ä¸º{new_max}")
                 
-                # Ö÷¶¯¶Ï¿ªµÍÓÅÏÈ¼¶Á¬½Ó
+                # ä¸»åŠ¨æ–­å¼€ä½ä¼˜å…ˆçº§è¿æ¥
                 closed_count = await self.network.close_low_priority_connections(percent=20)
-                actions.append(f"Ö÷¶¯¶Ï¿ª{closed_count}¸öµÍÓÅÏÈ¼¶Á¬½Ó")
+                actions.append(f"ä¸»åŠ¨æ–­å¼€{closed_count}ä¸ªä½ä¼˜å…ˆçº§è¿æ¥")
         
-        elif node_load < 0.3:  # µÍ¸ºÔØ
+        elif node_load < 0.3:  # ä½è´Ÿè½½
             new_max = min(2000, int(current_max_connections * 1.2))
             if new_max != current_max_connections:
                 self.network.config.performance_params["max_connections"] = new_max
-                actions.append(f"½ÚµãµÍ¸ºÔØ£¬×î´óÁ¬½ÓÊı´Ó{current_max_connections}µ÷ÕûÎª{new_max}")
+                actions.append(f"èŠ‚ç‚¹ä½è´Ÿè½½ï¼Œæœ€å¤§è¿æ¥æ•°ä»{current_max_connections}è°ƒæ•´ä¸º{new_max}")
         
-        # ¸ù¾İÍøÂçÎÈ¶¨ĞÔµ÷ÕûĞÄÌø¼ä¸ô
+        # æ ¹æ®ç½‘ç»œç¨³å®šæ€§è°ƒæ•´å¿ƒè·³é—´éš”
         stability = stats.get("stability_score", 0.5)
         current_heartbeat = self.network.config.heartbeat_interval
-        if stability < 0.5:  # µÍÎÈ¶¨ĞÔ
+        if stability < 0.5:  # ä½ç¨³å®šæ€§
             new_interval = max(10, current_heartbeat // 2)
             if new_interval != current_heartbeat:
                 self.network.config.heartbeat_interval = new_interval
-                actions.append(f"ÍøÂçÎÈ¶¨ĞÔµÍ£¬ĞÄÌø¼ä¸ô´Ó{current_heartbeat}µ÷ÕûÎª{new_interval}Ãë")
-        elif stability > 0.8:  # ¸ßÎÈ¶¨ĞÔ
+                actions.append(f"ç½‘ç»œç¨³å®šæ€§ä½ï¼Œå¿ƒè·³é—´éš”ä»{current_heartbeat}è°ƒæ•´ä¸º{new_interval}ç§’")
+        elif stability > 0.8:  # é«˜ç¨³å®šæ€§
             new_interval = min(120, current_heartbeat * 2)
             if new_interval != current_heartbeat:
                 self.network.config.heartbeat_interval = new_interval
-                actions.append(f"ÍøÂçÎÈ¶¨ĞÔ¸ß£¬ĞÄÌø¼ä¸ô´Ó{current_heartbeat}µ÷ÕûÎª{new_interval}Ãë")
+                actions.append(f"ç½‘ç»œç¨³å®šæ€§é«˜ï¼Œå¿ƒè·³é—´éš”ä»{current_heartbeat}è°ƒæ•´ä¸º{new_interval}ç§’")
         
         return actions
 
     def _optimize_crypto_strategy(self, stats: Dict[str, Any]) -> List[str]:
-        """ÓÅ»¯¼ÓÃÜ²ßÂÔ"""
+        """ä¼˜åŒ–åŠ å¯†ç­–ç•¥"""
         actions = []
         current_level = self.network.config.performance_params.get("encryption_level", "high")
         
-        # ¸ù¾İĞÔÄÜºÍ°²È«ĞÔĞèÇóÆ½ºâ¼ÓÃÜ¼¶±ğ
+        # æ ¹æ®æ€§èƒ½å’Œå®‰å…¨æ€§éœ€æ±‚å¹³è¡¡åŠ å¯†çº§åˆ«
         if stats["avg_latency"] > self.thresholds["latency"]["high"] and current_level == "high":
-            # ¸ßÑÓ³ÙÇÒµ±Ç°Îª¸ß¼ÓÃÜ¼¶±ğ£¬½µ¼¶ÒÔÌá¸ßĞÔÄÜ
+            # é«˜å»¶è¿Ÿä¸”å½“å‰ä¸ºé«˜åŠ å¯†çº§åˆ«ï¼Œé™çº§ä»¥æé«˜æ€§èƒ½
             self.network.config.performance_params["encryption_level"] = "medium"
-            actions.append("¸ßÑÓ³ÙÍøÂç£¬¼ÓÃÜ¼¶±ğ´Óhigh½µÎªmedium")
+            actions.append("é«˜å»¶è¿Ÿç½‘ç»œï¼ŒåŠ å¯†çº§åˆ«ä»highé™ä¸ºmedium")
         
         elif stats["error_rate"] < self.thresholds["error_rate"]["low"] and current_level != "high":
-            # µÍ´íÎóÂÊÇÒÍøÂçÎÈ¶¨£¬Ìá¸ß¼ÓÃÜ¼¶±ğ
+            # ä½é”™è¯¯ç‡ä¸”ç½‘ç»œç¨³å®šï¼Œæé«˜åŠ å¯†çº§åˆ«
             self.network.config.performance_params["encryption_level"] = "high"
-            actions.append("ÍøÂçÎÈ¶¨£¬¼ÓÃÜ¼¶±ğÌáÉıÖÁhigh")
+            actions.append("ç½‘ç»œç¨³å®šï¼ŒåŠ å¯†çº§åˆ«æå‡è‡³high")
         
-        # ¸ù¾İ½ÚµãÀàĞÍµ÷Õû»ìÏı¼¶±ğ
+        # æ ¹æ®èŠ‚ç‚¹ç±»å‹è°ƒæ•´æ··æ·†çº§åˆ«
         node_type = self.network.identity.node_type
         current_obfuscation = self.network.config.performance_params.get("obfuscation_level", "medium")
         
         if node_type == NodeType.D_NODE and current_obfuscation != "high":
             self.network.config.performance_params["obfuscation_level"] = "high"
-            actions.append("D½ÚµãÌáÉı»ìÏı¼¶±ğÖÁhigh")
+            actions.append("DèŠ‚ç‚¹æå‡æ··æ·†çº§åˆ«è‡³high")
         elif node_type == NodeType.U_NODE and current_obfuscation == "high":
             self.network.config.performance_params["obfuscation_level"] = "medium"
-            actions.append("U½Úµã½µµÍ»ìÏı¼¶±ğÖÁmedium")
+            actions.append("UèŠ‚ç‚¹é™ä½æ··æ·†çº§åˆ«è‡³medium")
         
         return actions
 
     def get_optimization_report(self, last_n: int = 10) -> List[Dict[str, Any]]:
-        """»ñÈ¡×î½üµÄÓÅ»¯±¨¸æ"""
+        """è·å–æœ€è¿‘çš„ä¼˜åŒ–æŠ¥å‘Š"""
         return list(self.optimization_history)[-last_n:]
 
     def get_recommendation(self) -> Dict[str, str]:
-        """»ùÓÚÀúÊ·ÓÅ»¯¸ø³öÏµÍ³¸Ä½ø½¨Òé"""
+        """åŸºäºå†å²ä¼˜åŒ–ç»™å‡ºç³»ç»Ÿæ”¹è¿›å»ºè®®"""
         if not self.optimization_history:
-            return {"½¨Òé": "ÔİÎŞ×ã¹»Êı¾İÉú³É½¨Òé"}
+            return {"å»ºè®®": "æš‚æ— è¶³å¤Ÿæ•°æ®ç”Ÿæˆå»ºè®®"}
         
-        # ·ÖÎö¸ßÆµÓÅ»¯¶¯×÷
+        # åˆ†æé«˜é¢‘ä¼˜åŒ–åŠ¨ä½œ
         action_counts = defaultdict(int)
         for record in self.optimization_history:
             for action in record["actions"]:
-                action_counts[action.split("£¬")[0]] += 1
+                action_counts[action.split("ï¼Œ")[0]] += 1
         
-        # Éú³É½¨Òé
+        # ç”Ÿæˆå»ºè®®
         recommendations = []
         if len(action_counts) > 0:
             most_common = max(action_counts.items(), key=lambda x: x[1])
             if most_common[1] > len(self.optimization_history) * 0.7:
-                recommendations.append(f"ÏµÍ³Æµ·±{most_common[0]}£¬½¨Òé¼ì²éÏà¹ØÍøÂç»·¾³")
+                recommendations.append(f"ç³»ç»Ÿé¢‘ç¹{most_common[0]}ï¼Œå»ºè®®æ£€æŸ¥ç›¸å…³ç½‘ç»œç¯å¢ƒ")
         
-        # »ùÓÚµ±Ç°×´Ì¬¸ø³ö½¨Òé
+        # åŸºäºå½“å‰çŠ¶æ€ç»™å‡ºå»ºè®®
         current_stats = self.network.performance_monitor.get_performance_stats()
         if current_stats.get("avg_latency", 0) > self.thresholds["latency"]["high"]:
-            recommendations.append("µ±Ç°ÍøÂçÑÓ³Ù½Ï¸ß£¬½¨ÒéÓÅ»¯½ÚµãµØÀíÎ»ÖÃ·Ö²¼")
+            recommendations.append("å½“å‰ç½‘ç»œå»¶è¿Ÿè¾ƒé«˜ï¼Œå»ºè®®ä¼˜åŒ–èŠ‚ç‚¹åœ°ç†ä½ç½®åˆ†å¸ƒ")
         if current_stats.get("packet_loss", 0) > self.thresholds["packet_loss"]["high"]:
-            recommendations.append("µ±Ç°ÍøÂç¶ª°üÂÊ½Ï¸ß£¬½¨ÒéÔö¼ÓÈßÓà½Úµã")
+            recommendations.append("å½“å‰ç½‘ç»œä¸¢åŒ…ç‡è¾ƒé«˜ï¼Œå»ºè®®å¢åŠ å†—ä½™èŠ‚ç‚¹")
         
-        return {"½¨Òé": recommendations}
+        return {"å»ºè®®": recommendations}
 
 class FaultRecovery:
-    """¹ÊÕÏ»Ö¸´"""
+    """æ•…éšœæ¢å¤"""
     
     def __init__(self, network: DistributedAnonymousNetwork):
         self.network = network
     
     async def handle_failure(self, failure_type: str, details: Dict[str, Any]):
-        """´¦Àí¹ÊÕÏ"""
+        """å¤„ç†æ•…éšœ"""
         if failure_type == "node_failure":
             await self._handle_node_failure(details)
         elif failure_type == "network_failure":
@@ -3264,21 +3385,21 @@ class FaultRecovery:
             await self._handle_service_failure(details)
     
     async def _handle_node_failure(self, details: Dict[str, Any]):
-        """´¦Àí½Úµã¹ÊÕÏ"""
+        """å¤„ç†èŠ‚ç‚¹æ•…éšœ"""
         node_id = details.get("node_id")
         if node_id in self.network.node_list:
             self.network.node_list[node_id]["active"] = False
-            logger.warning(f"±ê¼Ç½Úµã {node_id} ÎªÊ§Ğ§")
+            logger.warning(f"æ ‡è®°èŠ‚ç‚¹ {node_id} ä¸ºå¤±æ•ˆ")
 
 async def main():
-    """Ö÷º¯Êı"""
+    """ä¸»å‡½æ•°"""
     network = DistributedAnonymousNetwork()
     
     try:
-        # Æô¶¯ÏµÍ³
+        # å¯åŠ¨ç³»ç»Ÿ
         await network.start()
         
-        # Ä£Äâ´¦ÀíÒ»Ğ©ÇëÇó
+        # æ¨¡æ‹Ÿå¤„ç†ä¸€äº›è¯·æ±‚
         for i in range(3):
             request = {
                 "url": f"https://example.com/test{i}",
@@ -3287,18 +3408,18 @@ async def main():
                 "body": b""
             }
             result = await network.handle_client_request(request)
-            logger.info(f"ÇëÇó´¦Àí½á¹û: {result}")
+            logger.info(f"è¯·æ±‚å¤„ç†ç»“æœ: {result}")
             
             await asyncio.sleep(10)
         
-        # ÔËĞĞÒ»¶ÎÊ±¼ä
-        await asyncio.sleep(300)  # 5·ÖÖÓ
+        # è¿è¡Œä¸€æ®µæ—¶é—´
+        await asyncio.sleep(300)  # 5åˆ†é’Ÿ
         
     except KeyboardInterrupt:
-        logger.info("ÊÕµ½ÖĞ¶ÏĞÅºÅ£¬ÕıÔÚ¹Ø±Õ...")
+        logger.info("æ”¶åˆ°ä¸­æ–­ä¿¡å·ï¼Œæ­£åœ¨å…³é—­...")
     finally:
         await network.stop()
 
 if __name__ == "__main__":
-    # ÔËĞĞÏµÍ³
+    # è¿è¡Œç³»ç»Ÿ
     asyncio.run(main())
