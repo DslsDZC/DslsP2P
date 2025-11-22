@@ -1,233 +1,124 @@
-﻿# Anonymous P2P Network with Browser Engine Support
+﻿# Distributed Anonymous Network System (DSLSP2P)
 
 ## Project Overview
 
-A decentralized, anonymous peer-to-peer network that enables secure web content fetching through relay nodes with optional browser engine support for JavaScript-heavy websites.
+A Python-based distributed anonymous network system that enables decentralized secure communication and data transmission. The system employs multi-hop routing, data fragmentation, and dynamic DNS technologies to provide highly anonymous network communication capabilities.
 
-## Key Features
+## Core Features
 
-### 🛡️ Privacy Protection
-- **Anonymous Request Routing**: Web requests are routed through multiple peer nodes
-- **IP Address Masking**: Source IP addresses are hidden from target websites
-- **No Central Server**: Fully decentralized architecture prevents single points of failure
+### 🔒 Security & Anonymity
+- **Multi-hop Routing**: Data is forwarded through multiple nodes to conceal the true source
+- **Data Fragmentation**: Data is split into multiple fragments transmitted via different paths
+- **Dynamic Encryption**: Uses ChaCha20 and RSA encryption algorithms to protect data
+- **Parameter Obfuscation**: Adds random perturbations to prevent traffic analysis
 
-### 🌐 Advanced Web Access
-- **Dual Fetching Modes**: 
-  - Standard HTTP requests for simple content
-  - Headless browser engine for JavaScript-rendered pages
-- **Automatic Fallback**: Seamless switching between fetching methods
-- **Real Browser Simulation**: Chrome-based engine with realistic user agents
+### 🌐 Network Architecture
+- **Three Node Types**:
+  - **D-Node**: Full-function node supporting DNS registration and UPnP
+  - **U-Node**: Limited-function node relying on D-nodes
+  - **R-Node**: Relay-dependent node with basic forwarding capabilities
+- **Intelligent Routing**: Multi-factor routing selection based on reputation, latency, and bandwidth
+- **Dynamic Discovery**: P2P node discovery and network topology maintenance
 
-### 🔄 Network Protocol
-- **Hybrid Communication**: UDP for node discovery + TCP for reliable data transfer
-- **Custom Protocol**: Binary header format with message type differentiation
-- **Automatic Node Discovery**: Periodic broadcasting and heartbeat mechanisms
-- **Dynamic Network Topology**: Self-healing with expired node cleanup
+### 🔄 Dynamic DNS Integration
+- **Multi-provider Support**: Cloudflare, Alibaba Cloud, and other DNS providers
+- **Dynamic Subdomains**: Automatic subdomain allocation and updates for nodes
+- **Failover**: Automatic switching between primary and backup DNS providers
+- **Lease Management**: Automatic renewal and cleanup of subdomain leases
 
-## System Architecture
+### 📊 Performance Optimization
+- **Adaptive Optimization**: Dynamic parameter adjustment based on network conditions
+- **Smart Fragmentation**: Optimized fragmentation strategy based on content type and size
+- **Load Balancing**: Traffic distribution with node load awareness
+- **Health Monitoring**: Multi-dimensional node health checking
+
+## Technical Architecture
 
 ### Core Components
+- **Node Management**: Identity generation, type determination, capability assessment
+- **Session Management**: Data fragmentation, reassembly, integrity verification
+- **Routing Engine**: Multi-path calculation, performance optimization
+- **DNS Manager**: Unified management of multiple providers
+- **Performance Monitor**: Real-time metric collection and analysis
 
-```
-AnonymousP2PNode
-├── Network Layer
-│   ├── UDP Listener (Node Discovery)
-│   ├── TCP Server (Data Relay)
-│   └── Broadcast Service
-├── Web Client
-│   ├── HTTP Session Manager
-│   └── Browser Engine (Selenium/Chrome)
-├── Node Management
-│   ├── Known Nodes Registry
-│   └── Health Monitoring
-└── Protocol Handler
-    ├── Message Serialization
-    └── Request Routing
-```
+### Communication Protocols
+- **TCP Extension Protocol**: Supports extended options and parameter obfuscation
+- **Encrypted Communication**: End-to-end encryption and integrity protection
+- **Heartbeat Mechanism**: Node liveliness detection and maintenance
+- **Discovery Protocol**: P2P node information exchange
 
-### Message Types
-- `NODE_REGISTER`: Node registration and capability announcement
-- `ANON_REQUEST`: Anonymous web page request
-- `ANON_RESPONSE`: Fetch results with content
-- `DATA_RELAY`: Inter-node data forwarding
-- `HEARTBEAT`: Node liveliness verification
+## Quick Start
 
-## Installation
+### Environment Requirements
+- Python 3.8+
+- Dependencies: `aiohttp`, `pycryptodome`, `upnpclient`, `psutil`
 
-### Prerequisites
-```bash
-# Required packages
-pip install requests selenium
-
-# Chrome Driver (for browser engine)
-# On Ubuntu: sudo apt-get install chromium-chromedriver
-# On macOS: brew install chromedriver
-```
-
-### Quick Start
-```bash
-# Start a node with default settings
-python p2p_node.py
-
-# Start with specific ports and browser support
-python p2p_node.py --port 9000 --udp-port 9001 --node-id "my_node"
-
-# Disable browser engine
-python p2p_node.py --no-browser
-```
-
-## Usage Examples
-
-### Command Line Interface
-```bash
-# Fetch webpage through random peer (standard mode)
-python p2p_node.py --fetch "https://example.com"
-
-# Fetch with browser engine via specific node
-python p2p_node.py --fetch "https://dynamic-site.com" --browser --via-node "node_123"
-
-# Add node manually and test
-python p2p_node.py --add-node "node_abc:192.168.1.100:8889" --test
-```
-
-### Interactive Mode
+### Basic Usage
 ```python
-# After starting the node, use the menu:
-# 1. View node information and network status
-# 2. List discovered peer nodes
-# 3. Manually add trusted nodes
-# 4. Request web pages (standard/HTTP mode)
-# 5. Request web pages (browser engine mode)
-# 6. Run network diagnostics
-# 7. Exit gracefully
+# Create network instance
+network = DistributedAnonymousNetwork("config.dpdsls")
+
+# Start the system
+await network.start()
+
+# Handle requests
+request = {
+    "url": "https://example.com",
+    "method": "GET",
+    "headers": {},
+    "body": b""
+}
+result = await network.handle_client_request(request)
 ```
 
-## Configuration Options
+### Configuration File
+The system uses `.dpdsls` format configuration files, supporting conditional expressions and environment variables:
+```ini
+[network]
+scan_domain = dsls.top
+exclude_subdomains = mail, www, ftp, admin
 
-### Network Settings
-- `--port`: TCP listening port (default: 8889)
-- `--udp-port`: UDP broadcast port (default: 8888)
-- `--node-id`: Custom node identifier
+[dns]
+primary_provider = cloudflare
+backup_providers = aliyun
 
-### Browser Engine
-- `--browser`: Enable browser engine for requests
-- `--no-browser`: Disable browser engine completely
-
-### Operational Modes
-- `--fetch URL`: Direct URL fetching
-- `--via-node NODE_ID`: Specify relay node
-- `--add-node NODE_INFO`: Manual node addition
-- `--test`: Network connectivity test
-- `--log-file PATH`: Log output file
-
-## Protocol Specification
-
-### Message Format
-```
-+--------------------------------+
-| Header (9 bytes)              |
-+--------------------------------+
-| Total Length (4 bytes)        |
-| Message Type (1 byte)         |
-| Sequence Number (4 bytes)     |
-+--------------------------------+
-| Body (Variable Length)        |
-| JSON-encoded data             |
-+--------------------------------+
+[security]
+encryption_level = high
+max_hops = 8
 ```
 
-### Node Discovery
-1. Nodes broadcast presence via UDP every 5 seconds
-2. Receiving nodes update their known nodes registry
-3. Heartbeat messages maintain node liveliness
-4. Nodes expire after 60 seconds of inactivity
+## Application Scenarios
 
-### Anonymous Request Flow
-1. Client selects relay node from known peers
-2. Request is serialized and sent via TCP
-3. Relay node fetches content (HTTP or browser)
-4. Response is returned through the same path
-5. All intermediate nodes only see encrypted relay data
+### 🛡️ Privacy Protection
+- Sensitive data transmission
+- Anonymous network access
+- Traffic analysis prevention
 
-## Browser Engine Capabilities
+### 🔗 Decentralized Applications
+- Distributed storage
+- P2P communication
+- Censorship-resistant networks
 
-### Supported Features
-- **JavaScript Execution**: Full DOM manipulation support
-- **Dynamic Content**: AJAX, WebSocket, and real-time updates
-- **Session Management**: Cookies and local storage persistence
-- **Resource Loading**: Images, CSS, and external assets
-- **Mobile Emulation**: User agent spoofing
+### 🌍 Network Penetration
+- NAT traversal
+- Firewall bypassing
+- Hybrid network deployment
 
-### Performance Considerations
-- **Memory Usage**: ~100-200MB per browser instance
-- **Load Time**: 2-5 seconds for page rendering
-- **Fallback Strategy**: Automatic switch to HTTP on failure
+## System Advantages
 
-## Network Security
+1. **High Anonymity**: Strong anonymity through multi-hop routing and data fragmentation
+2. **Resilient Architecture**: Supports different node types for various network environments
+3. **Easy Expansion**: Modular design supporting functional extensions
+4. **Flexible Configuration**: Supports dynamic configuration and environment adaptation
+5. **Performance Adaptation**: Automatic parameter optimization based on network conditions
 
-### Privacy Guarantees
-- **Source Obfuscation**: Target websites see relay node IP
-- **Traffic Mixing**: Multiple request paths available
-- **No Logging**: Ephemeral request handling
+## Development Status
 
-### Limitations
-- **Not End-to-End Encrypted**: Content visible to relay nodes
-- **Trust Requirements**: Relies on peer node honesty
-- **Network Exposure**: IP addresses visible to direct peers
+Current version is a complete implementation including all core features:
+- ✅ Node management and discovery
+- ✅ Secure communication protocols
+- ✅ DNS integration and management
+- ✅ Performance monitoring and optimization
+- ✅ Fault recovery mechanisms
 
-## Troubleshooting
-
-### Common Issues
-
-**Browser Engine Fails to Start**
-```bash
-# Check Chrome installation
-which google-chrome
-# Install missing dependencies
-sudo apt-get install -y chromium-browser
-```
-
-**Node Discovery Problems**
-```bash
-# Verify UDP port accessibility
-netstat -anu | grep 8888
-# Check firewall settings
-sudo ufw status
-```
-
-**Connection Timeouts**
-- Ensure all nodes use consistent port configurations
-- Verify network subnet compatibility
-- Check for NAT traversal issues
-
-### Diagnostics
-Use the built-in network test:
-```bash
-python p2p_node.py --test
-```
-
-## Development
-
-### Extending Functionality
-```python
-# Adding new message types
-class ExtendedMessageType(MessageType):
-    FILE_SHARE = 10
-    STREAM_DATA = 11
-
-# Custom message handlers
-def _handle_file_share(self, data, sock, addr):
-    # Implementation for new feature
-    pass
-```
-
-### Testing
-```bash
-# Start multiple nodes for testing
-python p2p_node.py --port 8890 --node-id "test_node_1"
-python p2p_node.py --port 8891 --node-id "test_node_2"
-```
-
-## License & Contribution
-
-This project is designed for educational and research purposes. Users are responsible for complying with local laws and website terms of service when using this software.
+This is a fully functional distributed anonymous network system implementation suitable for various application scenarios requiring high anonymity and decentralized communication.
