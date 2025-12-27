@@ -126,12 +126,16 @@ This is a fully functional distributed anonymous network system implementation s
 
 
 
-#Disclaimer Against Illegal Use
-#Project Name: DslsP2P ("the Project")
+##Disclaimer Against Illegal Use
+
+Project Name: DslsP2P ("the Project")
 Platform: GitHub
 Nature: Anonymous networking tools / software / source code
-#IMPORTANT NOTICE:
-#Before accessing, copying, using, modifying, or distributing this Project (including but not limited to source code, binaries, documentation, and related materials), please read, understand, and agree to all terms of this Agreement. If you do not agree to any term herein, please cease use of the Project immediately. Any use of the Project constitutes your acknowledgment that you have read, understood, and fully accepted the entirety of this Agreement.
+
+##IMPORTANT NOTICE:
+
+Before accessing, copying, using, modifying, or distributing this Project (including but not limited to source code, binaries, documentation, and related materials), please read, understand, and agree to all terms of this Agreement. If you do not agree to any term herein, please cease use of the Project immediately. Any use of the Project constitutes your acknowledgment that you have read, understood, and fully accepted the entirety of this Agreement.
+
 #1. Project Purpose and Ownership
 #1.1 This Project is intended solely for legitimate technical research, academic exchange, privacy protection testing, network communication theory studies, and other lawful purposes within all applicable jurisdictions.
 #1.2 The developers, contributors, and owners (collectively, "the Developers") provide the technical implementation only and assume no responsibility for the actions or consequences of any user.
